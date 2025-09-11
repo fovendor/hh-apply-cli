@@ -1,0 +1,369 @@
+#!/usr/bin/env bash
+
+# Зависимости: hh-applicant-tool, jq, curl, less, fzf, coreutils, w3m
+set -euo pipefail
+
+# Гарантируем UTF-8, чтобы wc -m и cut -c работали посимвольно
+export LC_ALL="${LC_ALL:-C.UTF-8}"
+export LANG="${LANG:-C.UTF-8}"
+
+# ---------------------------------------------------------------------------
+# ---------------------------- НАСТРОЙКИ ------------------------------------
+# ---------------------------------------------------------------------------
+
+# --------------------------- АТРИБУТЫ ПОИСКА -------------------------------
+
+# Чтобы увидеть полный список ID специальностей запусти скрипт с флагом -p
+ROLE_IDS_CONFIG="73, 104, 107"
+
+# Поиск по словам в разделе из переменной SEARCH_FIELD. 
+TEXT_INCLUDE='("Руководитель" OR "Manager" OR "Менеджер" OR "Lead" OR "Директор" OR "Head")'
+NEGATIVE='("1С" OR "Битрикс" OR "Bitrix" OR "SAP" OR "SMM" OR "SEO" OR "маркетинг" OR "продаж" OR "строительств" OR "junior" OR "стажёр" OR "джуниор" OR "начинающий")'
+
+# Где искать текст: name (в названии), company_name (в названии компании), description (в описании)
+# Нельзя искать по двум ключам (например, "name, description"), но можно оставить значение пустым и скрипт будет искать везде 
+SEARCH_FIELD="name"
+
+# Режим работы: 
+SCHEDULE="remote"
+PERIOD="1"
+
+# --------- НАСТРОЙКИ ОТОБРАЖЕНИЯ ДАННЫХ В ТАБЛИЦЕ С ВАКАНСИЯМИ -------------
+MAX_ID=6
+MAX_TITLE=50
+MAX_COMPANY=32
+MAX_STATUS=5
+PREVIEW_WIDTH_PERCENT=45
+
+# ---------------------------------------------------------------------------
+# ------------------------ ОСНОВНЫЕ ФУНКЦИИ ---------------------------------
+# ---------------------------------------------------------------------------
+
+usage() {
+  cat <<'EOF'
+Использование: pm-search [опции]
+  --prof-roles или -p   показать справочник специальностей
+  --no-skip-applied     НЕ пропускать компании, куда ранее уже был отклик
+  --no-dedupe           не убирать дубли (по "Название + Компания")
+  --cover FILE          путь к файлу с сопроводительным письмом (перебивает reply_message из конфига hh-applicant-tool)
+  --help или -h         помощь
+EOF
+}
+
+format_cell() {
+  local text="$1"
+  local width="$2"
+  text="${text//$'\n'/ }"
+  text="${text//$'\t'/ }"
+  local len
+  len="$(printf '%s' "$text" | wc -m | tr -d '[:space:]')"
+  local out="$text"
+  if (( len > width )); then
+    local cutw=$(( width - 1 ))
+    out="$(printf '%s' "$text" | cut -c 1-"$cutw")…"
+  fi
+  local after_len
+  after_len="$(printf '%s' "$out" | wc -m | tr -d '[:space:]')"
+  local pad=$(( width - after_len ))
+  if (( pad > 0 )); then
+    printf "%s%*s" "$out" "$pad" ""
+  else
+    printf "%s" "$out"
+  fi
+}
+
+api_call() {
+  local out
+  if ! out="$(hh-applicant-tool call-api "$@")"; then
+    echo "---" >&2
+    echo "ОШИБКА: вызов API завершился неудачно (см. сообщение выше от hh-applicant-tool)." >&2
+    return 1
+  fi
+  if ! jq -e . >/dev/null 2>&1 <<<"$out"; then
+    echo "ОШИБКА: API вернул не-JSON для '$*'. Возможно, просрочена аутентификация." >&2
+    echo "Попробуйте запустить: hh-applicant-tool authorize" >&2
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
+show_prof_roles() {
+  echo "Загрузка справочника специальностей" >&2
+  local roles_json; roles_json="$(api_call /professional_roles)"
+  {
+    echo -e "ID\tНАЗВАНИЕ РОЛИ\t(КАТЕГОРИЯ)"
+    printf -- "-%.0s" $(seq 1 "$(tput cols 2>/dev/null || echo 80)")
+    echo ""
+    jq -r '.categories[] | .name as $cat_name | .roles[] | "\(.id)\t\(.name)\t(\($cat_name))"' <<< "$roles_json" |
+      column -t -s $'\t'
+  } | less -S -R
+  exit 0
+}
+
+# ------------------------ ОБРАБОТКА АРГУМЕНТОВ ---------------------------
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--prof-roles) show_prof_roles; exit 0;;
+    --no-skip-applied) SKIP_APPLIED=0; shift;;
+    --no-dedupe) DEDUPE=0; shift;;
+    --cover) COVER_FILE="$2"; shift 2;;
+    -h|--help) usage; exit 0;;
+    *) echo "Неизвестный аргумент: $1"; usage; exit 1;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# ------------------------ ОСНОВНАЯ ЛОГИКА СКРИПТА --------------------------
+# ---------------------------------------------------------------------------
+
+if ! command -v fzf &> /dev/null; then echo "ОШИБКА: 'fzf' не найден." >&2; exit 12; fi
+if ! command -v w3m &> /dev/null; then echo "ОШИБКА: 'w3m' не найден." >&2; exit 13; fi
+
+SKIP_APPLIED=1
+DEDUPE=1
+COVER_FILE=""
+
+export CACHE_DIR="$HOME/.cache/pm-search-cache"
+mkdir -p "$CACHE_DIR"
+
+csv_escape() { local s="${1//$'\n'/ }"; s="${s//$'\t'/ }"; s="${s//\"/\"\"}"; printf '"%s"' "$s"; }
+TEXT_QUERY="$TEXT_INCLUDE"
+[[ -n "${NEGATIVE:-}" ]] && TEXT_QUERY="$TEXT_QUERY NOT ($NEGATIVE)"
+
+get_cfg_path() {
+  local p; p="$(hh-applicant-tool config -p 2>/dev/null || true)"
+  if jq -e . >/dev/null 2>&1 <<<"$p"; then
+    jq -r '.path // empty' <<<"$p"
+  elif [[ -n "$p" && -f "$p" ]]; then echo "$p"
+  elif [[ -f "$HOME/.config/hh-applicant-tool/config.json" ]]; then echo "$HOME/.config/hh-applicant-tool/config.json"
+  elif [[ -f "$HOME/Library/Application Support/hh-applicant-tool/config.json" ]]; then echo "$HOME/Library/Application Support/hh-applicant-tool/config.json"
+  else echo ""; fi
+}
+
+ROLE_IDS=()
+CLEANED_IDS_CONFIG="${ROLE_IDS_CONFIG//[[:space:]]/}"
+if [[ -n "$CLEANED_IDS_CONFIG" ]]; then
+  ROLES_DIR="$(api_call /professional_roles)"
+  sleep 1 # Небольшая пауза после первого запроса
+  IFS=',' read -r -a ROLE_IDS <<< "$CLEANED_IDS_CONFIG"
+  ROLE_NAMES_FOUND=()
+  for id in "${ROLE_IDS[@]}"; do
+    name="$(jq -r --arg id "$id" '.categories[] .roles[] | select(.id == $id) | .name' <<<"$ROLES_DIR" | head -n1)"
+    if [[ -n "$name" && "$name" != "null" ]]; then ROLE_NAMES_FOUND+=("«$name»"); else
+      echo "Внимание: не нашёл название для role_id «$id»" >&2; ROLE_NAMES_FOUND+=("ID:$id"); fi
+  done
+  if [[ ${#ROLE_NAMES_FOUND[@]} -gt 0 ]]; then echo "Поиск по специальностям: ${ROLE_NAMES_FOUND[*]}"; fi
+  if [[ ${#ROLE_IDS[@]} -eq 0 ]]; then echo "ОШИБКА: не удалось распознать ни одного ID из ROLE_IDS_CONFIG." >&2; exit 1; fi
+else
+  echo "ROLE_IDS_CONFIG пуст — поиск будет без фильтра по ролям (только по тексту)." >&2
+fi
+
+echo "Загрузка истории откликов" >&2
+PAGES="$(api_call /negotiations per_page=100 | jq -r '.pages // 1')"
+APPLIED_EMPLOYERS_JSON="$(
+  for p in $(seq 0 $((PAGES-1))); do
+    api_call /negotiations per_page=100 page="$p"; sleep 1;
+  done |
+  jq -s '[ .[] | .items[].vacancy.employer.id | tostring ] | unique'
+)"
+
+build_vac_args() {
+  VAC_ARGS=( schedule="$SCHEDULE" period="$PERIOD" order_by=publication_time per_page=100 text="$TEXT_QUERY" )
+  [[ -n "${SEARCH_FIELD:-}" ]] && VAC_ARGS+=( search_field="$SEARCH_FIELD" )
+  for rid in "${ROLE_IDS[@]}"; do VAC_ARGS+=( professional_role="$rid" ); done
+}
+
+collect_vacancies() {
+  build_vac_args
+  local pages; pages="$(api_call /vacancies "${VAC_ARGS[@]}" | jq -r '.pages // 1')"
+  for p in $(seq 0 $((pages-1))); do
+    build_vac_args; VAC_ARGS+=( page="$p" )
+    api_call /vacancies "${VAC_ARGS[@]}"; sleep 1;
+  done | jq -s '[ .[] | .items[] ]'
+}
+
+echo "Поиск вакансий" >&2
+VACANCIES_JSON_RAW="$(collect_vacancies)"
+
+if [[ "${DEDUPE:-1}" -eq 1 ]]; then
+  VACANCIES_JSON="$( jq 'def norm: (tostring | ascii_downcase | gsub("[\r\n\t]+";" ") | gsub("[ ]+";" ") | gsub("^ | $";"")); reduce .[] as $v ({seen:{}, out: []}; (($v.name // "" | norm) as $n | (($v.employer.id // empty) as $eid | if ($eid|tostring) != "" then ($eid|tostring) else ($v.employer.name // "" | norm) end) as $e | ($n + "|" + $e) as $k | if .seen[$k] then . else .seen[$k]=true | .out += [$v] end)) | .out' <<< "$VACANCIES_JSON_RAW" )"
+else
+  VACANCIES_JSON="$VACANCIES_JSON_RAW"
+fi
+
+if [[ "${DEDUPE:-1}" -eq 1 ]]; then
+  before=$(jq 'length' <<< "$VACANCIES_JSON_RAW")
+  after=$(jq 'length' <<< "$VACANCIES_JSON")
+  (( before>after )) && echo "Удалено дублей по сочетанию "название+компания": $((before-after))" >&2
+fi
+
+ALL_ENTRIES="$( jq --argjson applied "$APPLIED_EMPLOYERS_JSON" -c 'to_entries | map(. as $e | { idx: ($e.key+1), id: $e.value.id, emp: ($e.value.employer.id|tostring), name: $e.value.name, employer_name: ($e.value.employer.name // "-"), url: $e.value.alternate_url, prev: ( ($applied | index(($e.value.employer.id|tostring))) != null ) })' <<< "$VACANCIES_JSON" )"
+
+render_preview() {
+    local full_line="$1"
+    local preview_width="$2"
+    local vac_id; vac_id=$(echo "$full_line" | cut -f1)
+    local cache_file="$CACHE_DIR/$vac_id.json"
+
+    # Шаг 1: Если вакансии нет в кэше, загружаем ее
+    if [[ ! -f "$cache_file" ]]; then
+        # Если нет - делаем API-запрос и сохраняем результат
+        if ! api_call "/vacancies/$vac_id" > "$cache_file"; then
+            rm -f "$cache_file" # Удаляем пустой файл в случае ошибки
+            echo "ОШИБКА: Не удалось загрузить детали для $vac_id"
+            return
+        fi
+    fi
+
+    # Шаг 2: Читаем содержимое кэш-файла
+    local vacancy_json; vacancy_json="$(cat "$cache_file")"
+
+    # Шаг 3: Проверка на валидность, защита от битого JSON.
+    if ! jq -e . >/dev/null 2>&1 <<<"$vacancy_json"; then
+        echo "ОШИБКА: Кэш для вакансии $vac_id поврежден (невалидный JSON)."
+        echo "Удаляю кэш-файл. Попробуйте просмотреть эту вакансию еще раз."
+        rm -f "$cache_file"
+        return
+    fi
+
+    # Шаг 4: Безопасно извлекаем заголовок
+    echo "$vacancy_json" | jq -r '
+    "Ссылка: \(.alternate_url)\n\n--- \(.name) ---\n\nРаботодатель: \(.employer.name)\n" +
+    (if .salary then "Зарплата: \(.salary|if .from and .to then "\((.from|tostring))-\((.to|tostring)) \(.currency)" elif .from then "от \((.from|tostring)) \(.currency)" elif .to then "до \((.to|tostring)) \(.currency)" else "не указана" end)\n" else "" end) +
+    "---"'
+
+    # Шаг 5: Безопасно извлекаем описание.
+    # Используем // для вывода запасного текста, если от API пришло .description == null
+    echo "$vacancy_json" |
+    jq -r '.description // "[ Описание для этой вакансии недоступно через API ]"' |
+    w3m -cols "$preview_width" -T text/html -dump
+}
+export -f render_preview
+export -f api_call
+
+FZF_INPUT=$(mktemp)
+jq -r '.[] | [ .id, .url, .name, .employer_name, .prev, .idx ] | @tsv' <<< "$ALL_ENTRIES" |
+while IFS=$'\t' read -r id url name employer_name prev idx; do
+  prev_applied_human=$([[ "$prev" == "true" ]] && echo "да" || echo "нет")
+  COL_ID="$(format_cell "#$idx" "$MAX_ID")"
+  COL_TITLE="$(format_cell "$name" "$MAX_TITLE")"
+  COL_COMPANY="$(format_cell "$employer_name" "$MAX_COMPANY")"
+  COL_STATUS="$(format_cell "$prev_applied_human" "$MAX_STATUS")"
+  printf "%s\t%s\t%s %s %s %s\n" \
+    "$id" "$url" "$COL_ID" "$COL_TITLE" "$COL_COMPANY" "$COL_STATUS" >> "$FZF_INPUT"
+done
+
+HEADER=$(printf "%s %s %s %s" "$(format_cell "№" "$MAX_ID")" "$(format_cell "Название вакансии" "$MAX_TITLE")" "$(format_cell "Компания" "$MAX_COMPANY")" "$(format_cell "Ранее" "$MAX_STATUS")")
+SEPARATOR="$(printf "%.0s-" $(seq 1 200))"
+
+mapfile -t SELECTED_LINES < <( { echo -e " \t \t$HEADER"; echo -e " \t \t$SEPARATOR"; cat "$FZF_INPUT"; } | fzf --multi --ansi --header-lines=2 --prompt="[Tab] выбрать, [Enter] подтвердить > " --preview-window="right:${PREVIEW_WIDTH_PERCENT}%:wrap" --preview='render_preview {} {pw}' --delimiter=$'\t' --with-nth=3.. ) || true
+rm -f "$FZF_INPUT" || true
+mapfile -t SELECTED_IDS < <( for line in "${SELECTED_LINES[@]}"; do cut -f1 <<< "$line"; done )
+
+if [[ ${#SELECTED_IDS[@]} -eq 0 ]]; then echo "Вакансии не выбраны. Завершение работы."; exit 0; fi
+
+VAC_COUNT=${#SELECTED_IDS[@]}
+CONFIRM_CODE=$(( RANDOM % 90000 + 10000 ))
+echo; echo "Вы выбрали ${VAC_COUNT} вакансий."
+echo -n "Для подтверждения отправки откликов, введите число ${CONFIRM_CODE}: "
+IFS= read -r USER_CONFIRM </dev/tty || true
+if [[ "$USER_CONFIRM" != "$CONFIRM_CODE" ]]; then echo; echo "Ввод не совпал. Отправка откликов отменена."; exit 0; fi
+echo "Подтверждение принято."
+
+pick_resume() {
+  if [[ -n "${RESUME_ID:-}" ]]; then echo "$RESUME_ID"; return; fi
+  local json count; json="$(api_call /resumes/mine)"; count="$(jq '.items | length' <<< "$json")"
+  if [[ "$count" -eq 0 ]]; then echo "Нет резюме в аккаунте" >&2; exit 3;
+  elif [[ "$count" -eq 1 ]]; then jq -r '.items[0].id' <<< "$json";
+  else
+    echo; echo "Выбери резюме по номеру:"
+    jq -r '.items | to_entries[] | "\(.key+1)) \(.value.title) [\(.value.id)]"' <<< "$json"
+    IFS= read -r idx </dev/tty; idx=$((idx-1)); jq -r ".items[$idx].id" <<< "$json"; fi
+}
+RESUME_ID="$(pick_resume)"
+
+COVER_TEXT=""
+CFG_PATH="$(get_cfg_path)"
+if [[ -n "$COVER_FILE" ]]; then COVER_TEXT="$(cat "$COVER_FILE")";
+elif [[ -n "$CFG_PATH" && -f "$CFG_PATH" ]]; then COVER_TEXT="$(jq -r '.reply_message // empty' "$CFG_PATH" 2>/dev/null || true)"; fi
+
+REPORT_DIR="$HOME/hh-reports/$(date +'%Y-%m-%d')"; mkdir -p "$REPORT_DIR"
+REPORT_FILE="$REPORT_DIR/$(date +'%H-%M-%S')_apply.csv"
+echo -n "№,Вакансия,Компания,Ссылка,Откликался ранее,Отклик отправлен,Дата/время (MSK),Сложная вакансия,Причина" > "$REPORT_FILE"
+
+ACCESS_TOKEN=""
+USER_AGENT="hh-applicant-tool bash-client"
+if [[ -n "$CFG_PATH" && -f "$CFG_PATH" ]]; then
+  ACCESS_TOKEN="$(jq -r '.token.access_token // empty' "$CFG_PATH" 2>/dev/null || true)"
+  UA_FROM_CFG="$(jq -r '.user_agent // empty' "$CFG_PATH" 2>/dev/null || true)"
+  [[ -n "$UA_FROM_CFG" && "$UA_FROM_CFG" != "null" ]] && USER_AGENT="$UA_FROM_CFG"
+fi
+if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then echo "Не найден access_token. Запусти: hh-applicant-tool authorize" >&2; exit 4; fi
+
+http_post_negotiation() {
+  local vacancy_id="$1"; local tmp_body; tmp_body="$(mktemp)"; local code;
+  local curl_args=(-sS -o "$tmp_body" -w "%{http_code}" -X POST "https://api.hh.ru/negotiations" -H "Authorization: Bearer $ACCESS_TOKEN" -H "Accept: application/json" -H "HH-User-Agent: $USER_AGENT" --data-urlencode "vacancy_id=$vacancy_id" --data-urlencode "resume_id=$RESUME_ID")
+  [[ -n "$COVER_TEXT" ]] && curl_args+=( --data-urlencode "message=$COVER_TEXT" )
+  set +e; code="$(curl "${curl_args[@]}")"; local rc=$?; set -e
+  echo "$rc" "$code" "$tmp_body"
+}
+
+is_complex_vacancy() {
+  local vac_id="$1"
+  local cache_file="$CACHE_DIR/$vac_id.json"
+  if [[ ! -f "$cache_file" ]]; then
+    if ! api_call "/vacancies/$vac_id" > "$cache_file"; then
+        rm -f "$cache_file"
+        return 1
+    fi
+  fi
+  jq -e '. | has("questions") and (.questions | length > 0)' "$cache_file" >/dev/null 2>&1
+}
+
+SELECTED_ENTRIES_JSON=$(jq --argjson ids "$(printf '%s\n' "${SELECTED_IDS[@]}" | jq -R . | jq -s .)" 'map(select(.id as $id | $ids | index($id)))' <<< "$ALL_ENTRIES")
+
+echo; echo "Старт откликов"; any_sent=0
+while IFS= read -r row; do
+  [[ -z "$row" ]] && continue
+  idx="$(jq -r '.idx' <<< "$row")"; id="$(jq -r '.id' <<< "$row")"; name="$(jq -r '.name' <<< "$row")"
+  employer_name="$(jq -r '.employer_name' <<< "$row")"; url="$(jq -r '.url' <<< "$row")"; prev_applied="$(jq -r '.prev' <<< "$row")"
+  prev_applied_human=$([[ "$prev_applied" == "true" ]] && echo "да" || echo "нет")
+  if [[ $SKIP_APPLIED -eq 1 && "$prev_applied" == "true" ]]; then
+    echo "[-] #$idx пропущен: у работодателя уже был отклик"; reason="skip-applied"; sent="нет"; complex="нет"
+  elif is_complex_vacancy "$id"; then
+    echo "[-] #$idx пропущен: у вакансии обязательные вопросы"; reason="questions_required (precheck)"; sent="нет"; complex="да"
+  else
+    echo "[+] #$idx -> POST /negotiations (vacancy_id=$id)"
+    read -r rc http_code bodyfile <<<"$(http_post_negotiation "$id")"
+    if (( rc != 0 )); then
+      sent="нет"; complex="нет"; reason="curl rc=$rc"; echo "[!] сетевой/клиентский сбой curl rc=$rc; см. CSV"
+    else
+      if [[ "$http_code" =~ ^[123][0-9]{2}$ ]]; then echo "[ok] отклик отправлен"; sent="да"; complex="нет"; reason=""; any_sent=1
+      else
+        if jq -e . >/dev/null 2>&1 <"$bodyfile"; then
+          kinds="$(jq -r '.errors[]? | .type' <"$bodyfile" | tr '\n' ' ')"
+          msg="$(jq -r '.errors[]? | (.reason // .value // .message // "")' <"$bodyfile" | paste -sd'|' -)"
+          case " $kinds " in
+            *" questions_required "*) echo "[!] у вакансии обязательные вопросы"; sent="нет"; complex="да"; reason="${msg:-questions_required}";;
+            *" already_applied "*) echo "[=] уже откликались"; sent="нет"; complex="нет"; reason="${msg:-already_applied}";;
+            *" negotiations_forbidden "*) echo "[!] работодатель запретил отклики"; sent="нет"; complex="нет"; reason="${msg:-negotiations_forbidden}";;
+            *" resume_not_published "*) echo "[!] резюме не опубликовано"; sent="нет"; complex="нет"; reason="${msg:-resume_not_published}";;
+            *" conditions_not_met "*) echo "[!] не выполнены условия"; sent="нет"; complex="нет"; reason="${msg:-conditions_not_met}";;
+            *" not_found "*) echo "[!] вакансия архивирована"; sent="нет"; complex="нет"; reason="${msg:-not_found}";;
+            *) echo "[!] ошибка API ($http_code): ${msg:-unknown}"; sent="нет"; complex="нет"; reason="${msg:-unknown}";;
+          esac
+        else
+          echo "[!] не-JSON ответ ($http_code)"; sent="нет"; complex="нет"; reason="HTTP $http_code (не-JSON)"
+        fi
+      fi
+      [[ -f "${bodyfile:-}" ]] && rm -f "$bodyfile" || true
+    fi
+  fi
+  ts="$(TZ=Europe/Moscow date +'%Y-%m-%d %H:%M:%S')"
+  { printf '\n'; csv_escape "$idx"; echo -n ','; csv_escape "$name"; echo -n ','; csv_escape "$employer_name"; echo -n ','; csv_escape "$url"; echo -n ','; csv_escape "$prev_applied_human"; echo -n ','; csv_escape "$sent"; echo -n ','; csv_escape "$ts"; echo -n ','; csv_escape "$complex"; echo -n ','; csv_escape "$reason"; } >> "$REPORT_FILE"
+done < <(jq -c '.[]' <<< "$SELECTED_ENTRIES_JSON")
+
+echo
+if [[ "$any_sent" -eq 1 ]]; then echo "Готово. CSV-отчёт: $REPORT_FILE"
+else echo "Заявки не отправлены (всё пропущено/ошибки). CSV-отчёт: $REPORT_FILE"; fi

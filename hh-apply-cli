@@ -7,10 +7,12 @@ set -euo pipefail
 export LC_ALL="${LC_ALL:-C.UTF-8}"
 export LANG="${LANG:-C.UTF-8}"
 
+# ---------------------------------------------------------------------------
+# ---------------------------- НАСТРОЙКИ ------------------------------------
+# ---------------------------------------------------------------------------
 
-# ============================= НАСТРОЙКИ =============================== 
+# ------------------ ПОИСК ВАКАНСИЙ И ОТПРАВКА ОТКЛИКОВ ---------------------
 
-# -------------- НАСТРОЙКИ ПОИСКА ВАКАНСИЙ И ОТКЛИКОВ -------------------
 # Путь к сопроводительному письму (рекомендуется, если несколько аккаунтов с разными резюме)
 COVER_FILE="~/cover-letters/analyst.txt"
 
@@ -40,14 +42,14 @@ SKIP_APPLIED=1
 # Убирать дубли по сочетанию "название + компания".
 DEDUPE=1
 
-# --------- НАСТРОЙКИ ОТОБРАЖЕНИЯ ДАННЫХ В ТАБЛИЦЕ С ВАКАНСИЯМИ -------------
+# -------------- ОТОБРАЖЕНИЕ ДАННЫХ В ТАБЛИЦЕ С ВАКАНСИЯМИ ------------------
 MAX_ID=6
 MAX_TITLE=50
 MAX_COMPANY=32
 MAX_STATUS=5
 PREVIEW_WIDTH_PERCENT=45
 
-# --------------------------- НАСТРОЙКИ ЦВЕТОВ --------------------------------
+# --------------------------- ТЕМА ОФОРМЛЕНИЯ -------------------------------
 # Используются HEX-коды. Оставьте переменные пустыми для использования цветов терминала по умолчанию.
 COLOR_BG='#303446'          # Фон
 COLOR_FG='#c6d0f5'          # Основной текст
@@ -341,26 +343,46 @@ IFS= read -r USER_CONFIRM </dev/tty || true
 if [[ "$USER_CONFIRM" != "$CONFIRM_CODE" ]]; then echo; echo "Ввод не совпал. Отправка откликов отменена."; exit 0; fi
 echo "Подтверждение принято."
 
+RESUME_ID=""
+RESUME_TITLE=""
+
 pick_resume() {
-  if [[ -n "${RESUME_ID:-}" ]]; then echo "$RESUME_ID"; return; fi
-  local json count; json="$(api_call /resumes/mine)"; count="$(jq '.items | length' <<< "$json")"
-  if [[ "$count" -eq 0 ]]; then echo "Нет резюме в аккаунте" >&2; exit 3;
-  elif [[ "$count" -eq 1 ]]; then jq -r '.items[0].id' <<< "$json";
+  local json count
+  json="$(api_call /resumes/mine)"
+  count="$(jq '.items | length' <<< "$json")"
+
+  if [[ "$count" -eq 0 ]]; then
+    echo "Нет резюме в аккаунте" >&2
+    exit 3
+  elif [[ "$count" -eq 1 ]]; then
+    RESUME_ID="$(jq -r '.items[0].id' <<< "$json")"
+    RESUME_TITLE="$(jq -r '.items[0].title' <<< "$json")"
   else
     echo; echo "Выбери резюме по номеру:"
     jq -r '.items | to_entries[] | "\(.key+1)) \(.value.title) [\(.value.id)]"' <<< "$json"
-    IFS= read -r idx </dev/tty; idx=$((idx-1)); jq -r ".items[$idx].id" <<< "$json"; fi
+    local idx
+    IFS= read -r idx </dev/tty
+    idx=$((idx-1))
+    local selected_resume_json
+    selected_resume_json=$(jq -r ".items[$idx]" <<< "$json")
+    RESUME_ID=$(jq -r '.id' <<< "$selected_resume_json")
+    RESUME_TITLE=$(jq -r '.title' <<< "$selected_resume_json")
+  fi
 }
-RESUME_ID="$(pick_resume)"
-COVER_TEXT=""
 
+pick_resume
+echo "Отклик с резюме: «${RESUME_TITLE}»"
+
+COVER_TEXT=""
 CFG_PATH="$(get_cfg_path)"
 if [[ -n "$COVER_FILE" && -f "$COVER_FILE" ]]; then COVER_TEXT="$(cat "$COVER_FILE")";
 elif [[ -n "$CFG_PATH" && -f "$CFG_PATH" ]]; then COVER_TEXT="$(jq -r '.reply_message // empty' "$CFG_PATH" 2>/dev/null || true)"; fi
 
 REPORT_DIR="$HOME/hh-reports/$(date +'%Y-%m-%d')"; mkdir -p "$REPORT_DIR"
 REPORT_FILE="$REPORT_DIR/$(date +'%H-%M-%S')_apply.csv"
-echo -n "№,Вакансия,Компания,Ссылка,Откликался ранее,Отклик отправлен,Дата/время (MSK),Сложная вакансия,Причина" > "$REPORT_FILE"
+
+echo "$(csv_escape "Резюме: $RESUME_TITLE"),,,,,,, " > "$REPORT_FILE"
+echo ",№,Вакансия,Компания,Ссылка,Откликался ранее,Отклик отправлен,Причина,Дата/время (MSK)" >> "$REPORT_FILE"
 
 ACCESS_TOKEN=""
 USER_AGENT="hh-applicant-tool bash-client"
@@ -399,39 +421,53 @@ while IFS= read -r row; do
   idx="$(jq -r '.idx' <<< "$row")"; id="$(jq -r '.id' <<< "$row")"; name="$(jq -r '.name' <<< "$row")"
   employer_name="$(jq -r '.employer_name' <<< "$row")"; url="$(jq -r '.url' <<< "$row")"; prev_applied="$(jq -r '.prev' <<< "$row")"
   prev_applied_human=$([[ "$prev_applied" == "true" ]] && echo "да" || echo "нет")
+  
+  sent="нет" reason=""
+
   if [[ $SKIP_APPLIED -eq 1 && "$prev_applied" == "true" ]]; then
-    echo "[-] #$idx пропущен: у работодателя уже был отклик"; reason="skip-applied"; sent="нет"; complex="нет"
+    echo "[-] #$idx пропущен: у работодателя уже был отклик"; reason="skip-applied"
   elif is_complex_vacancy "$id"; then
-    echo "[-] #$idx пропущен: у вакансии обязательные вопросы"; reason="questions_required (precheck)"; sent="нет"; complex="да"
+    echo "[-] #$idx пропущен: у вакансии обязательные вопросы"; reason="questions_required (precheck)"
   else
     echo "[+] #$idx -> POST /negotiations (vacancy_id=$id)"
     read -r rc http_code bodyfile <<<"$(http_post_negotiation "$id")"
     if (( rc != 0 )); then
-      sent="нет"; complex="нет"; reason="curl rc=$rc"; echo "[!] сетевой/клиентский сбой curl rc=$rc; см. CSV"
+      reason="curl rc=$rc"; echo "[!] сетевой/клиентский сбой curl rc=$rc; см. CSV"
     else
-      if [[ "$http_code" =~ ^[123][0-9]{2}$ ]]; then echo "[ok] отклик отправлен"; sent="да"; complex="нет"; reason=""; any_sent=1
+      if [[ "$http_code" =~ ^[123][0-9]{2}$ ]]; then echo "[ok] отклик отправлен"; sent="да"; reason=""; any_sent=1
       else
         if jq -e . >/dev/null 2>&1 <"$bodyfile"; then
           kinds="$(jq -r '.errors[]? | .type' <"$bodyfile" | tr '\n' ' ')"
           msg="$(jq -r '.errors[]? | (.reason // .value // .message // "")' <"$bodyfile" | paste -sd'|' -)"
+          if [[ "$msg" == "test_required" ]]; then
+              msg="требуются ответы"
+          fi
           case " $kinds " in
-            *" questions_required "*) echo "[!] у вакансии обязательные вопросы"; sent="нет"; complex="да"; reason="${msg:-questions_required}";;
-            *" already_applied "*) echo "[=] уже откликались"; sent="нет"; complex="нет"; reason="${msg:-already_applied}";;
-            *" negotiations_forbidden "*) echo "[!] работодатель запретил отклики"; sent="нет"; complex="нет"; reason="${msg:-negotiations_forbidden}";;
-            *" resume_not_published "*) echo "[!] резюме не опубликовано"; sent="нет"; complex="нет"; reason="${msg:-resume_not_published}";;
-            *" conditions_not_met "*) echo "[!] не выполнены условия"; sent="нет"; complex="нет"; reason="${msg:-conditions_not_met}";;
-            *" not_found "*) echo "[!] вакансия архивирована"; sent="нет"; complex="нет"; reason="${msg:-not_found}";;
-            *) echo "[!] ошибка API ($http_code): ${msg:-unknown}"; sent="нет"; complex="нет"; reason="${msg:-unknown}";;
+            *" questions_required "*) echo "[!] у вакансии обязательные вопросы"; sent="нет"; reason="${msg:-questions_required}";;
+            *" already_applied "*) echo "[=] уже откликались"; sent="нет"; reason="${msg:-already_applied}";;
+            *" negotiations_forbidden "*) echo "[!] работодатель запретил отклики"; sent="нет"; reason="${msg:-negotiations_forbidden}";;
+            *" resume_not_published "*) echo "[!] резюме не опубликовано"; sent="нет"; reason="${msg:-resume_not_published}";;
+            *" conditions_not_met "*) echo "[!] не выполнены условия"; sent="нет"; reason="${msg:-conditions_not_met}";;
+            *" not_found "*) echo "[!] вакансия архивирована"; sent="нет"; reason="${msg:-not_found}";;
+            *) echo "[!] ошибка API ($http_code): ${msg:-unknown}"; sent="нет"; reason="${msg:-unknown}";;
           esac
         else
-          echo "[!] не-JSON ответ ($http_code)"; sent="нет"; complex="нет"; reason="HTTP $http_code (не-JSON)"
+          echo "[!] не-JSON ответ ($http_code)"; reason="HTTP $http_code (не-JSON)"
         fi
       fi
       [[ -f "${bodyfile:-}" ]] && rm -f "$bodyfile" || true
     fi
   fi
   ts="$(TZ=Europe/Moscow date +'%Y-%m-%d %H:%M:%S')"
-  { printf '\n'; csv_escape "$idx"; echo -n ','; csv_escape "$name"; echo -n ','; csv_escape "$employer_name"; echo -n ','; csv_escape "$url"; echo -n ','; csv_escape "$prev_applied_human"; echo -n ','; csv_escape "$sent"; echo -n ','; csv_escape "$ts"; echo -n ','; csv_escape "$complex"; echo -n ','; csv_escape "$reason"; } >> "$REPORT_FILE"
+  printf ",%s,%s,%s,%s,%s,%s,%s,%s\n" \
+    "$(csv_escape "$idx")" \
+    "$(csv_escape "$name")" \
+    "$(csv_escape "$employer_name")" \
+    "$(csv_escape "$url")" \
+    "$(csv_escape "$prev_applied_human")" \
+    "$(csv_escape "$sent")" \
+    "$(csv_escape "$reason")" \
+    "$(csv_escape "$ts")" >> "$REPORT_FILE"
 done < <(jq -c '.[]' <<< "$SELECTED_ENTRIES_JSON")
 
 echo

@@ -153,7 +153,7 @@ ensure_areas_cache() {
             echo "ОШИБКА: Не удалось загрузить справочник городов." >&2
             exit 1
         fi
-        echo "Обрабатываю справочник..." >&2
+        echo "Обрабатываю справочник" >&2
         # Обрабатывает до 3 уровней вложенности, что покрывает большинство случаев (Страна -> Округ -> Регион -> Город).
         jq -r '
           .[] | .areas[] as $level1 |
@@ -245,22 +245,21 @@ echo
 IFS= read -r -p "> " SEARCH_MODE_CHOICE </dev/tty
 SEARCH_MODE_CHOICE=${SEARCH_MODE_CHOICE:-1}
 
-# Массив для аргументов API
-declare -a VAC_ARGS=()
 SUMMARY_STRING=""
+VACANCIES_JSON_RAW=""
 
 if [[ "$SEARCH_MODE_CHOICE" -eq 1 ]]; then
-    # --- Автоматический режим ---
-    RESUME_DATA_JSON=$(api_call "/resumes/$SELECTED_RESUME_ID")
-    RESUME_TITLE=$(jq -r '.title' <<< "$RESUME_DATA_JSON")
-    SPEC_IDS=($(jq -r '.specialization[].id' <<< "$RESUME_DATA_JSON"))
-    VAC_ARGS+=( text="$RESUME_TITLE" )
-    for sid in "${SPEC_IDS[@]}"; do VAC_ARGS+=( specialization="$sid" ); done
-    SUMMARY_STRING="Автоматический поиск по резюме «$RESUME_TITLE»"
+    # --- АВТОМАТИЧЕСКИЙ РЕЖИМ С ПОСТ-ФИЛЬТРАЦИЕЙ ---
+    RESUME_TITLE=$(jq -r '.title' <<< "$SELECTED_RESUME_JSON")
+    SUMMARY_STRING="Рекомендованные вакансии для резюме «$RESUME_TITLE»"
 
     # -- Визард фильтров --
     DICTIONARIES=$(ensure_dictionaries_cache)
-    
+    filter_work_format_id=""
+    filter_area_id=""
+    filter_area_name=""
+    filter_salary=""
+
     # 1. Формат работы
     echo; echo -e "\e[1mВыберите формат:\e[0m"
     mapfile -t WORK_FORMAT_OPTS < <(jq -r '.work_format[] | "\(.id)\t\(.name)"' <<< "$DICTIONARIES")
@@ -272,16 +271,15 @@ if [[ "$SEARCH_MODE_CHOICE" -eq 1 ]]; then
     echo; IFS= read -r -p "> " WORK_FORMAT_CHOICE </dev/tty
     WORK_FORMAT_CHOICE=${WORK_FORMAT_CHOICE:-0}
     if [[ "$WORK_FORMAT_CHOICE" -ne 0 ]]; then
-        WORK_FORMAT_ID=$(cut -f1 <<< "${WORK_FORMAT_OPTS[$((WORK_FORMAT_CHOICE-1))]}")
-        VAC_ARGS+=( work_format="$WORK_FORMAT_ID" )
+        filter_work_format_id=$(cut -f1 <<< "${WORK_FORMAT_OPTS[$((WORK_FORMAT_CHOICE-1))]}")
         format_name=$(cut -f2 <<< "${WORK_FORMAT_OPTS[$((WORK_FORMAT_CHOICE-1))]}")
         SUMMARY_STRING+=", формат: ${format_name,,}"
     fi
 
     # 2. Город
-    area_summary_part=""
-    if [[ "${WORK_FORMAT_ID:-}" != "REMOTE" ]]; then
+    if [[ "${filter_work_format_id:-}" != "REMOTE" ]]; then
         echo; echo -e "\e[1mВыберите город:\e[0m"
+        RESUME_DATA_JSON=$(api_call "/resumes/$SELECTED_RESUME_ID") # Запрашиваем данные для города
         DEFAULT_AREA_ID=$(jq -r '.area.id // empty' <<< "$RESUME_DATA_JSON")
         DEFAULT_AREA_NAME=$(jq -r '.area.name // empty' <<< "$RESUME_DATA_JSON")
         if [[ -n "$DEFAULT_AREA_ID" && "$DEFAULT_AREA_NAME" != "null" ]]; then
@@ -296,56 +294,80 @@ if [[ "$SEARCH_MODE_CHOICE" -eq 1 ]]; then
         fi
 
         if [[ "$AREA_CHOICE" -eq 1 ]]; then
-            VAC_ARGS+=( area="$DEFAULT_AREA_ID" ); area_summary_part=", регион: $DEFAULT_AREA_NAME"
+            filter_area_id="$DEFAULT_AREA_ID"; filter_area_name="$DEFAULT_AREA_NAME"
         elif [[ "$AREA_CHOICE" -eq 2 ]]; then
             ensure_areas_cache
             selected_area="$(fzf < "$CACHE_DIR/areas_for_fzf.txt")" || true
             if [[ -n "$selected_area" ]]; then
-                area_id="$(cut -f1 <<< "$selected_area")"
-                area_name="$(cut -f2 <<< "$selected_area")"
-                VAC_ARGS+=( area="$area_id" ); area_summary_part=", регион: $area_name"
+                filter_area_id="$(cut -f1 <<< "$selected_area")"
+                filter_area_name="$(cut -f2 <<< "$selected_area")"
             fi
         fi
     fi
-    SUMMARY_STRING+="$area_summary_part"
+    [[ -n "$filter_area_name" ]] && SUMMARY_STRING+=", регион: $filter_area_name"
 
     # 3. Зарплата
-    echo; echo -e "\e[1mЖелаемая зарплата (Enter для пропуска)\e[0m"
-    echo; IFS= read -r -p "> " SALARY_INPUT </dev/tty
-    if [[ -n "$SALARY_INPUT" ]]; then
-        VAC_ARGS+=( salary="$SALARY_INPUT" only_with_salary=true )
-        SUMMARY_STRING+=", з/п от $SALARY_INPUT рублей"
-    fi
+    echo; echo -e "\e[1mЖелаемый уровень ЗП (Enter для пропуска)\e[0m"
+    echo; IFS= read -r -p "> " filter_salary </dev/tty
+    [[ -n "$filter_salary" ]] && SUMMARY_STRING+=", з/п от $filter_salary рублей"
+    
+    # --- ЭТАП ПОЛУЧЕНИЯ И ФИЛЬТРАЦИИ ДАННЫХ ---
+    clear
+    final_summary="${SUMMARY_STRING}."
+    summary_length=$(printf "%s" "$final_summary" | wc -m)
+    separator_line=$(printf "%${summary_length}s" | tr ' ' '-')
+    echo "$separator_line"; echo "$final_summary"; echo "$separator_line"; echo
+    
+    echo "Получение рекомендованных вакансий" >&2
+    VACANCIES_JSON_RAW=$(api_call "/resumes/$SELECTED_RESUME_ID/similar_vacancies" | jq '.items')
 
+    echo "Пост-фильтрация полученных данных" >&2
+    # Применяем фильтры последовательно
+    if [[ -n "$filter_work_format_id" ]]; then
+        VACANCIES_JSON_RAW=$(jq --arg wf "$filter_work_format_id" '[.[] | select(any(.work_format[]; .id == $wf))]' <<< "$VACANCIES_JSON_RAW")
+    fi
+    if [[ -n "$filter_area_id" ]]; then
+        VACANCIES_JSON_RAW=$(jq --arg area "$filter_area_id" '[.[] | select(.area.id == $area)]' <<< "$VACANCIES_JSON_RAW")
+    fi
+    if [[ -n "$filter_salary" ]]; then
+        VACANCIES_JSON_RAW=$(jq --arg s "$filter_salary" '[.[] | select(.salary and .salary.from and (.salary.from >= ($s | tonumber)))]' <<< "$VACANCIES_JSON_RAW")
+    fi
 else
-    # --- Ручной режим ---
     SUMMARY_STRING="Ручной поиск по настройкам из файла"
-    echo; echo "Выбран ручной режим. Использую настройки из файла."
+    echo; echo "Выбран ручной режим. Использую настройки из файла"
+    
+    clear
+    final_summary="${SUMMARY_STRING}."
+    summary_length=$(printf "%s" "$final_summary" | wc -m)
+    separator_line=$(printf "%${summary_length}s" | tr ' ' '-')
+    echo "$separator_line"; echo "$final_summary"; echo "$separator_line"; echo
+    
+    declare -a VAC_ARGS=()
     TEXT_QUERY="$TEXT_INCLUDE"
     [[ -n "${NEGATIVE:-}" ]] && TEXT_QUERY="$TEXT_QUERY NOT ($NEGATIVE)"
     VAC_ARGS=( work_format="$WORK_FORMAT" text="$TEXT_QUERY" )
     [[ -n "$AREA_ID" ]] && VAC_ARGS+=( area="$AREA_ID" )
     [[ -n "${SEARCH_FIELD:-}" ]] && VAC_ARGS+=( search_field="$SEARCH_FIELD" )
+    VAC_ARGS+=( period="$PERIOD" order_by=publication_time per_page=100 )
     CLEANED_IDS_CONFIG="${ROLE_IDS_CONFIG//[[:space:]]/}"
     if [[ -n "$CLEANED_IDS_CONFIG" ]]; then
       IFS=',' read -r -a ROLE_IDS <<< "$CLEANED_IDS_CONFIG"
       for rid in "${ROLE_IDS[@]}"; do VAC_ARGS+=( professional_role="$rid" ); done
     fi
+    
+    # Функция сбора вакансий для ручного режима
+    collect_vacancies() {
+      local pages; pages="$(api_call /vacancies "${VAC_ARGS[@]}" | jq -r '.pages // 1')"
+      [[ "$pages" -gt 10 ]] && pages=10
+      for p in $(seq 0 $((pages-1))); do
+        api_call /vacancies "${VAC_ARGS[@]}" page="$p"; sleep 0.5;
+      done | jq -s '[ .[] | .items[] ]'
+    }
+    
+    echo "Поиск вакансий" >&2
+    VACANCIES_JSON_RAW="$(collect_vacancies)"
 fi
 
-VAC_ARGS+=( period="$PERIOD" order_by=publication_time per_page=100 )
-
-clear
-
-final_summary="${SUMMARY_STRING}."
-# Подсчёт длины саммари в символах (wc -m для корректной работы с UTF-8) и генерация разделителей из дефисов
-summary_length=$(printf "%s" "$final_summary" | wc -m)
-separator_line=$(printf "%${summary_length}s" | tr ' ' '-')
-
-echo "$separator_line"
-echo "$final_summary"
-echo "$separator_line"
-echo
 echo "Загрузка истории откликов" >&2
 PAGES="$(api_call /negotiations per_page=100 | jq -r '.pages // 1')"
 APPLIED_EMPLOYERS_JSON="$(
@@ -354,19 +376,6 @@ APPLIED_EMPLOYERS_JSON="$(
   done |
   jq -s '[ .[] | .items[].vacancy.employer.id | tostring ] | unique'
 )"
-
-# Функция сбора вакансий
-collect_vacancies() {
-  local pages; pages="$(api_call /vacancies "${VAC_ARGS[@]}" | jq -r '.pages // 1')"
-  # Ограничение 10 страницами (1000 вакансий), чтобы не попасть в бесконечный цикл
-  [[ "$pages" -gt 10 ]] && pages=10
-  for p in $(seq 0 $((pages-1))); do
-    api_call /vacancies "${VAC_ARGS[@]}" page="$p"; sleep 0.5;
-  done | jq -s '[ .[] | .items[] ]'
-}
-
-echo "Поиск вакансий" >&2
-VACANCIES_JSON_RAW="$(collect_vacancies)"
 
 if [[ "${DEDUPE:-1}" -eq 1 ]]; then
   VACANCIES_JSON="$( jq 'def norm: (tostring | ascii_downcase | gsub("[\r\n\t]+";" ") | gsub("[ ]+";" ") | gsub("^ | $";"")); reduce .[] as $v ({seen:{}, out: []}; (($v.name // "" | norm) as $n | (($v.employer.id // empty) as $eid | if ($eid|tostring) != "" then ($eid|tostring) else ($v.employer.name // "" | norm) end) as $e | ($n + "|" + $e) as $k | if .seen[$k] then . else .seen[$k]=true | .out += [$v] end)) | .out' <<< "$VACANCIES_JSON_RAW" )"
@@ -380,7 +389,7 @@ if [[ "${DEDUPE:-1}" -eq 1 ]]; then
   (( before>after )) && echo "Удалено дублей по сочетанию "название+компания": $((before-after)) шт." >&2
 fi
 
-# Если ничего не найдено, выход
+# Если ничего не найдено, выходим
 if [[ "$(jq 'length' <<< "$VACANCIES_JSON")" -eq 0 ]]; then
     echo "По вашему запросу ничего не найдено. Попробуйте изменить фильтры."
     exit 0

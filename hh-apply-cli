@@ -71,7 +71,7 @@ COLOR_MARKER='#458588'  # Цвет маркера выбранных (Tab) ст�
 
 usage() {
   cat <<'EOF'
-v.1.4.2
+v.1.4.3
 Использование: pm-search [опции]
   --prof-roles или -p   показать справочник профессиональных ролей
   --find-city           интерактивный поиск ID города для ручного режима
@@ -534,12 +534,22 @@ if [[ ${#SELECTED_IDS[@]} -eq 0 ]]; then echo "Вакансии не выбра�
 # -------- ОТПРАВКА ОТКЛИКОВ --------
 
 VAC_COUNT=${#SELECTED_IDS[@]}
-CONFIRM_CODE=$(( RANDOM % 90000 + 10000 ))
+RESUME_TITLE_FOR_PROMPT=$(jq -r .title <<< "$SELECTED_RESUME_JSON")
 echo; echo "Вы выбрали ${VAC_COUNT} вакансий."
-echo -n "Для подтверждения отправки откликов на резюме «$(jq -r .title <<< "$SELECTED_RESUME_JSON")», введите число ${CONFIRM_CODE}: "
-IFS= read -r USER_CONFIRM </dev/tty || true
-if [[ "$USER_CONFIRM" != "$CONFIRM_CODE" ]]; then echo; echo "Ввод не совпал. Отправка откликов отменена."; exit 0; fi
-echo "Подтверждение принято."
+
+while true; do
+    CONFIRM_CODE=$(( RANDOM % 90000 + 10000 ))
+    echo -n "Для подтверждения отправки откликов на резюме «${RESUME_TITLE_FOR_PROMPT}», введите число ${CONFIRM_CODE}: "
+    IFS= read -r USER_CONFIRM </dev/tty || true
+
+    if [[ "$USER_CONFIRM" == "$CONFIRM_CODE" ]]; then
+        echo "Подтверждение принято."
+        break
+    else
+        echo
+        echo "Ввод не совпал. Пожалуйста, попробуйте еще раз."
+    fi
+done
 
 # Используем ID резюме, выбранное на первом шаге
 RESUME_ID="$SELECTED_RESUME_ID"
@@ -583,45 +593,111 @@ is_complex_vacancy() {
 }
 
 SELECTED_ENTRIES_JSON=$(jq --argjson ids "$(printf '%s\n' "${SELECTED_IDS[@]}" | jq -R . | jq -s .)" 'map(select(.id as $id | $ids | index($id)))' <<< "$ALL_ENTRIES")
-echo; echo "Старт откликов"; any_sent=0
+
+echo
+echo "Статус откликов:"
+echo
+any_sent=0
+
 while IFS= read -r row; do
   [[ -z "$row" ]] && continue
   idx="$(jq -r '.idx' <<< "$row")"; id="$(jq -r '.id' <<< "$row")"; name="$(jq -r '.name' <<< "$row")"
   employer_name="$(jq -r '.employer_name' <<< "$row")"; url="$(jq -r '.url' <<< "$row")"; prev_applied="$(jq -r '.prev' <<< "$row")"
   prev_applied_human=$([[ "$prev_applied" == "true" ]] && echo "да" || echo "нет")
-  sent="нет" reason=""
+  
+  # Переменные для CSV
+  sent="нет" 
+  reason=""
+
+  # Переменные для вывода в консоль
+  status_message=""
+  action_prefix=""
+  reason_text=""
+
   if [[ $SKIP_APPLIED -eq 1 && "$prev_applied" == "true" ]]; then
-    echo "[-] #$idx пропущен: у работодателя уже был отклик"; reason="skip-applied"
+    action_prefix="Пропуск"
+    reason_text="(ранее был отклик в эту компанию)"
+    reason="skip-applied"
   elif is_complex_vacancy "$id"; then
-    echo "[-] #$idx пропущен: у вакансии обязательные вопросы"; reason="questions_required (precheck)"
+    action_prefix="Пропуск"
+    reason_text="(требуются ответы на сайте)"
+    reason="questions_required (precheck)"
   else
-    echo "[+] #$idx -> POST /negotiations (vacancy_id=$id)"
     read -r rc http_code bodyfile <<<"$(http_post_negotiation "$id")"
     if (( rc != 0 )); then
-      reason="curl rc=$rc"; echo "[!] сетевой/клиентский сбой curl rc=$rc; см. CSV"
+      action_prefix="Отклик НЕ доставлен"
+      reason_text="(сетевая ошибка)"
+      reason="curl rc=$rc"
     else
-      if [[ "$http_code" =~ ^[123][0-9]{2}$ ]]; then echo "[ok] отклик отправлен"; sent="да"; reason=""; any_sent=1
+      if [[ "$http_code" =~ ^[123][0-9]{2}$ ]]; then 
+        status_message="ОК"
+        sent="да"
+        reason=""
+        any_sent=1
       else
         if jq -e . >/dev/null 2>&1 <"$bodyfile"; then
           kinds="$(jq -r '.errors[]? | .type' <"$bodyfile" | tr '\n' ' ')"
           msg="$(jq -r '.errors[]? | (.reason // .value // .message // "")' <"$bodyfile" | paste -sd'|' -)"
-          if [[ "$msg" == "test_required" ]]; then msg="требуются ответы"; fi
+          
           case " $kinds " in
-            *" questions_required "*) echo "[!] у вакансии обязательные вопросы"; sent="нет"; reason="${msg:-questions_required}";;
-            *" already_applied "*) echo "[=] уже откликались"; sent="нет"; reason="${msg:-already_applied}";;
-            *" negotiations_forbidden "*) echo "[!] работодатель запретил отклики"; sent="нет"; reason="${msg:-negotiations_forbidden}";;
-            *" resume_not_published "*) echo "[!] резюме не опубликовано"; sent="нет"; reason="${msg:-resume_not_published}";;
-            *" conditions_not_met "*) echo "[!] не выполнены условия"; sent="нет"; reason="${msg:-conditions_not_met}";;
-            *" not_found "*) echo "[!] вакансия архивирована"; sent="нет"; reason="${msg:-not_found}";;
-            *) echo "[!] ошибка API ($http_code): ${msg:-unknown}"; sent="нет"; reason="${msg:-unknown}";;
+            *" questions_required "*)
+              action_prefix="Пропуск"
+              reason_text="(требуются ответы)"
+              reason="${msg:-questions_required}"
+              ;;
+            *" already_applied "*)
+              action_prefix="Пропуск"
+              reason_text="(ранее был отклик в эту компанию)"
+              reason="${msg:-already_applied}"
+              ;;
+            *" negotiations_forbidden "*)
+              action_prefix="Отклик НЕ доставлен"
+              reason_text="(работодатель запретил отклики)"
+              reason="${msg:-negotiations_forbidden}"
+              ;;
+            *" resume_not_published "*)
+              action_prefix="Отклик НЕ доставлен"
+              reason_text="(резюме не опубликовано)"
+              reason="${msg:-resume_not_published}"
+              ;;
+            *" conditions_not_met "*)
+              action_prefix="Отклик НЕ доставлен"
+              reason_text="(не выполнены условия)"
+              reason="${msg:-conditions_not_met}"
+              ;;
+            *" not_found "*)
+              action_prefix="Отклик НЕ доставлен"
+              reason_text="(вакансия в архиве)"
+              reason="${msg:-not_found}"
+              ;;
+            *)
+              if [[ "$msg" == "test_required" ]]; then
+                  action_prefix="Пропуск"
+                  reason_text="(требуются ответы)"
+                  reason="test_required"
+              else
+                  action_prefix="Отклик НЕ доставлен"
+                  reason_text="(ошибка API: ${msg:-unknown})"
+                  reason="${msg:-unknown}"
+              fi
+              ;;
           esac
         else
-          echo "[!] не-JSON ответ ($http_code)"; reason="HTTP $http_code (не-JSON)"
+          action_prefix="Отклик НЕ доставлен"
+          reason_text="(не-JSON ответ, HTTP $http_code)"
+          reason="HTTP $http_code (не-JSON)"
         fi
       fi
       [[ -f "${bodyfile:-}" ]] && rm -f "$bodyfile" || true
     fi
   fi
+  
+  if [[ -z "$status_message" ]]; then
+      status_message="$action_prefix $reason_text"
+  fi
+
+  echo "$idx. $url $status_message"
+
   ts="$(TZ=Europe/Moscow date +'%Y-%m-%d %H:%M:%S')"
   printf ",%s,%s,%s,%s,%s,%s,%s,%s\n" \
     "$(csv_escape "$idx")" "$(csv_escape "$name")" "$(csv_escape "$employer_name")" \

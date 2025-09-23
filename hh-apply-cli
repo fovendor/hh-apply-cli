@@ -71,6 +71,7 @@ COLOR_MARKER='#458588'  # Цвет маркера выбранных (Tab) ст�
 
 usage() {
   cat <<'EOF'
+v.1.4.2
 Использование: pm-search [опции]
   --prof-roles или -p   показать справочник профессиональных ролей
   --find-city           интерактивный поиск ID города для ручного режима
@@ -378,15 +379,39 @@ APPLIED_EMPLOYERS_JSON="$(
 )"
 
 if [[ "${DEDUPE:-1}" -eq 1 ]]; then
-  VACANCIES_JSON="$( jq 'def norm: (tostring | ascii_downcase | gsub("[\r\n\t]+";" ") | gsub("[ ]+";" ") | gsub("^ | $";"")); reduce .[] as $v ({seen:{}, out: []}; (($v.name // "" | norm) as $n | (($v.employer.id // empty) as $eid | if ($eid|tostring) != "" then ($eid|tostring) else ($v.employer.name // "" | norm) end) as $e | ($n + "|" + $e) as $k | if .seen[$k] then . else .seen[$k]=true | .out += [$v] end)) | .out' <<< "$VACANCIES_JSON_RAW" )"
-else
-  VACANCIES_JSON="$VACANCIES_JSON_RAW"
-fi
+    # Шаг 1: Используем ОДИН jq-запрос для разделения исходного массива на два:
+    # .unique - вакансии, которые остаются
+    # .duplicates - вакансии, которые удаляются
+    PROCESSED_JSON=$(jq '
+      def norm: (tostring | ascii_downcase | gsub("[\r\n\t]+";" ") | gsub("[ ]+";" ") | gsub("^ | $";""));
+      reduce .[] as $v ({seen:{}, unique: [], duplicates: []};
+        (
+          ($v.name // "" | norm) as $n |
+          # УЛУЧШЕННАЯ ЛОГИКА: Явно проверяем, что .employer существует, перед тем как лезть в .id
+          (if $v.employer and $v.employer.id then ($v.employer.id | tostring) else ($v.employer.name // "") end | norm) as $e |
+          ($n + "|" + $e) as $k |
+          if .seen[$k] then .duplicates += [$v] else .seen[$k]=true | .unique += [$v] end
+        )
+      )
+    ' <<< "$VACANCIES_JSON_RAW")
 
-if [[ "${DEDUPE:-1}" -eq 1 ]]; then
-  before=$(jq 'length' <<< "$VACANCIES_JSON_RAW")
-  after=$(jq 'length' <<< "$VACANCIES_JSON")
-  (( before>after )) && echo "Удалено дублей по сочетанию "название+компания": $((before-after)) шт." >&2
+    # Извлекаем уникальные вакансии для работы скрипта
+    VACANCIES_JSON=$(jq '.unique' <<< "$PROCESSED_JSON")
+    
+    # Извлекаем дубликаты для отображения в отладке
+    DUPLICATES_JSON=$(jq '.duplicates' <<< "$PROCESSED_JSON")
+    DUPLICATES_COUNT=$(jq 'length' <<< "$DUPLICATES_JSON")
+
+    if [[ "$DUPLICATES_COUNT" -gt 0 ]]; then
+        echo "Удалено дублей по сочетанию "название+компания": $DUPLICATES_COUNT шт." >&2
+        echo
+        echo "--- Список удаленных дублей ---" >&2
+        # Выводим дубликаты с url в консоль
+        jq -r '.[] | "  - \(.name) -> \(.employer.name // "Имя не указано") (\(.alternate_url))"' <<< "$DUPLICATES_JSON" >&2
+        echo "------------------------------" >&2
+    fi
+else
+    VACANCIES_JSON="$VACANCIES_JSON_RAW"
 fi
 
 # Если ничего не найдено, выходим

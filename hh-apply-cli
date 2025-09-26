@@ -71,7 +71,7 @@ COLOR_MARKER='#458588'  # Цвет маркера выбранных (Tab) ст�
 
 usage() {
   cat <<'EOF'
-v.1.4.3
+v.1.4.4
 Использование: pm-search [опции]
   --prof-roles или -p   показать справочник профессиональных ролей
   --find-city           интерактивный поиск ID города для ручного режима
@@ -401,13 +401,14 @@ if [[ "${DEDUPE:-1}" -eq 1 ]]; then
     # Извлекаем дубликаты для отображения в отладке
     DUPLICATES_JSON=$(jq '.duplicates' <<< "$PROCESSED_JSON")
     DUPLICATES_COUNT=$(jq 'length' <<< "$DUPLICATES_JSON")
-
     if [[ "$DUPLICATES_COUNT" -gt 0 ]]; then
         echo "Удалено дублей по сочетанию "название+компания": $DUPLICATES_COUNT шт." >&2
         echo
         echo "--- Список удаленных дублей ---" >&2
-        # Выводим дубликаты с url в консоль
-        jq -r '.[] | "  - \(.name) -> \(.employer.name // "Имя не указано") (\(.alternate_url))"' <<< "$DUPLICATES_JSON" >&2
+        {
+          echo -e "Название вакансии\tКомпания\tСсылка"
+          jq -r '.[] | [.name, .employer.name // "Имя не указано", .alternate_url] | @tsv' <<< "$DUPLICATES_JSON"
+        } | column -t -s $'\t' >&2
         echo "------------------------------" >&2
     fi
 else
@@ -524,7 +525,7 @@ mapfile -t SELECTED_LINES < <(
     --preview-window="right:${PREVIEW_WIDTH_PERCENT}%:wrap" \
     --preview='render_preview {} {pw} "'"$CACHE_DIR"'"' \
     --delimiter=$'\t' --with-nth=3.. \
-    --bind "ctrl-h:execute(flip_fzf_state)+reload(render_fzf_list),scroll-up:page-up,scroll-down:page-down" \
+    --bind "ctrl-h:execute(flip_fzf_state)+reload(render_fzf_list),scroll-up:up,scroll-down:down" \
     < <(render_fzf_list)
 ) || true
 mapfile -t SELECTED_IDS < <( for line in "${SELECTED_LINES[@]}"; do cut -f1 <<< "$line"; done )

@@ -159,13 +159,14 @@ install_all() {
         _install_logic
     } > "$log_file" 2>&1
 
-    printf " %s✔ Установка hhcli завершена. %s\n\n" "${C_GREEN}" "${C_RESET}"
-
     printf "Краткая справка:\n"
-    printf "  Аутентификация в аккаунте на hh.ru: %s\n" "${C_YELLOW}hhcli --auth${C_RESET}"
-    printf "  Вывод списка всех резюме: %s\n" "${C_YELLOW}hhcli --list-resumes${C_RESET}"
-    printf "  Настройка конфигурации: nano %s\n" "${C_YELLOW}${CONFIG_FILE}${C_RESET}"
-    printf "  Запуск программы: %s\n" "${C_YELLOW}hhcli${C_RESET}"
+    {
+        printf "  Аутентификация:\t%s\n" "${C_YELLOW}hhcli --auth${C_RESET}"
+        printf "  Список резюме:\t%s\n" "${C_YELLOW}hhcli --list-resumes${C_RESET}"
+        printf "  Настройка:\t%s\n" "${C_YELLOW}nano ${CONFIG_FILE}${C_RESET}"
+        printf "  Запуск:\t%s\n" "${C_YELLOW}hhcli${C_RESET}"
+    } | column -t -s $'\t'
+
     printf "\n %s Подробности в лог-файле: %s%s%s\n" "${C_CYAN}" "${C_YELLOW}" "$log_file" "${C_RESET}"
 }
 

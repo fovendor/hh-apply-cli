@@ -1,78 +1,17 @@
 #!/usr/bin/env bash
-
-# Зависимости: hh-applicant-tool, jq, curl, less, fzf, coreutils, w3m
 set -euo pipefail
 
-# Гарантируем UTF-8, чтобы wc -m и cut -c работали посимвольно
 export LC_ALL="${LC_ALL:-C.UTF-8}"
 export LANG="${LANG:-C.UTF-8}"
 
-# ---------------------------------------------------------------------------
-# ---------------------------- НАСТРОЙКИ ------------------------------------
-# ---------------------------------------------------------------------------
-
-# Путь к сопроводительному письму (рекомендуется, если несколько аккаунтов с разными резюме)
-COVER_FILE="~/cover-letters/analyst.txt"
-
-# ----------------- НАСТРОЙКИ ДЛЯ РУЧНОГО РЕЖИМА ПОИСКА ---------------------
-
-# Формат работы для РУЧНОГО поиска (REMOTE, ON_SITE, HYBRID, FIELD_WORK)
-WORK_FORMAT="REMOTE"
-
-# ID города для РУЧНОГО поиска. Чтобы найти ID, запустите скрипт с флагом --find-city.
-# Незаполненный AREA_ID запустит поиск по всем регионам
-AREA_ID=""
-
-# Чтобы увидеть полный список ID специальностей запусти скрипт с флагом -p
-ROLE_IDS_CONFIG="157, 156, 10, 150, 148"
-
-# Где искать текст: name (в названии), company_name (в названии компании), description (в описании)
-SEARCH_FIELD="name"
-
-# Список слов для поиска, передаваемый переменной SEARCH_FIELD.
-TEXT_INCLUDE='("Руководитель" OR "руководитель айти" OR "руководитель IT" OR "руководитель ИТ" OR "руководитель ИИ" OR "Manager" OR "Менеджер" OR "Ведущий" OR "Лид" OR "Lead" OR "Директор" OR "Head")'
-
-# Пропускать вакансии, в SEARCH_FIELD которых встречаются слова из NEGATIVE
-NEGATIVE='("1С" OR "Битрикс" OR "Bitrix" OR "SAP" OR "SMM" OR "SEO" OR "маркетинг" OR "продаж" OR "строительств" OR "junior" OR "стажёр" OR "джуниор" OR "начинающий")'
-
-# ----------------------- ОБЩИЕ НАСТРОЙКИ ПОИСКА ---------------------------
-
-# За какой период искать вакансии (по умолчанию за 1 сутки)
-PERIOD="1"
-
-# Пропускать компании, куда уже был отклик.
-SKIP_APPLIED=1
-
-# Убирать дубли по сочетанию "название + компания".
-DEDUPE=1
-
-# --------- НАСТРОЙКИ ОТОБРАЖЕНИЯ ДАННЫХ В ТАБЛИЦЕ С ВАКАНСИЯМИ -------------
-MAX_ID=6
-MAX_TITLE=50
-MAX_COMPANY=32
-MAX_STATUS=5
-PREVIEW_WIDTH_PERCENT=45
-
-# --------------------------- НАСТРОЙКИ ЦВЕТОВ --------------------------------
-COLOR_BG='#282828'      # Фон
-COLOR_FG='#ebdbb2'      # Основной текст
-COLOR_BG_PLUS='#458588' # Цвет фона выделенной строки (под курсором)
-COLOR_FG_PLUS='#ebdbb2' # Цвет текста на выделенной строке (под курсором)
-COLOR_BORDER='#d3869b'  # Рамка окна предпросмотра
-COLOR_PROMPT='#fb4934'  # Цвет строки-приглашения
-COLOR_HEADER='#fabd2f'  # Цвет заголовка таблицы
-COLOR_INFO='#fb4934'    # Цвет инфо-строки (счетчик)
-COLOR_HL='#fe8019'      # Цвет подсветки совпадений в тексте
-COLOR_MARKER='#458588'  # Цвет маркера выбранных (Tab) строк
-
-# ---------------------------------------------------------------------------
-# ------------------------ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ --------------------------
-# ---------------------------------------------------------------------------
+if [ -f "$HOME/.config/hhcli/config.sh" ]; then
+    source "$HOME/.config/hhcli/config.sh"
+fi
 
 usage() {
   cat <<'EOF'
-v.1.4.4
-Использование: pm-search [опции]
+v.2.0.0
+Использование: hhcli [опции]
   --prof-roles или -p   показать справочник профессиональных ролей
   --find-city           интерактивный поиск ID города для ручного режима
   --cover FILE          путь к файлу с сопроводительным письмом (перебивает COVER_FILE из настроек)
@@ -110,7 +49,7 @@ api_call() {
   fi
   if ! jq -e . >/dev/null 2>&1 <<<"$out"; then
     echo "ОШИБКА: API вернул не-JSON для '$*'. Возможно, просрочена аутентификация." >&2
-    echo "Попробуйте запустить: hh-applicant-tool authorize" >&2
+    echo "Попробуйте запустить: hhcli --auth" >&2
     return 1
   fi
   printf '%s' "$out"
@@ -129,7 +68,6 @@ show_prof_roles() {
   exit 0
 }
 
-# Обеспечивает наличие кэша справочников (график работы и т.д.)
 ensure_dictionaries_cache() {
     local cache_file="$CACHE_DIR/dictionaries.json"
     if [[ ! -f "$cache_file" ]]; then
@@ -143,7 +81,6 @@ ensure_dictionaries_cache() {
     cat "$cache_file"
 }
 
-# Обеспечивает наличие кэша городов.
 ensure_areas_cache() {
     local cache_file_flat="$CACHE_DIR/areas_for_fzf.txt"
     if [[ ! -f "$cache_file_flat" ]]; then
@@ -155,7 +92,6 @@ ensure_areas_cache() {
             exit 1
         fi
         echo "Обрабатываю справочник" >&2
-        # Обрабатывает до 3 уровней вложенности, что покрывает большинство случаев (Страна -> Округ -> Регион -> Город).
         jq -r '
           .[] | .areas[] as $level1 |
           (
@@ -176,7 +112,6 @@ ensure_areas_cache() {
     fi
 }
 
-# Поиск городов
 find_city_interactive() {
     ensure_areas_cache
     echo "Поиск по городам. Выберите нужный и нажмите Enter." >&2
@@ -185,9 +120,8 @@ find_city_interactive() {
     exit 0
 }
 
-# ------------------------ ОБРАБОТКА АРГУМЕНТОВ ---------------------------
+CACHE_DIR="$HOME/.cache/hhcli-cache"
 
-CACHE_DIR="$HOME/.cache/pm-search-cache"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -p|--prof-roles) show_prof_roles; exit 0;;
@@ -199,19 +133,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ---------------------------------------------------------------------------
-# ------------------------ ОСНОВНАЯ ЛОГИКА СКРИПТА --------------------------
-# ---------------------------------------------------------------------------
-
 if ! command -v fzf &> /dev/null; then echo "ОШИБКА: 'fzf' не найден." >&2; exit 12; fi
 if ! command -v w3m &> /dev/null; then echo "ОШИБКА: 'w3m' не найден." >&2; exit 13; fi
 
 mkdir -p "$CACHE_DIR"
 
-# Wizard для настройки поиска
-# ==========================================================
-
-# Шаг 1: Выбор резюме
 echo
 MY_RESUMES_JSON="$(api_call /resumes/mine)"
 RESUME_COUNT=$(jq '.items | length' <<< "$MY_RESUMES_JSON")
@@ -238,10 +164,9 @@ else
 fi
 SELECTED_RESUME_ID=$(jq -r '.id' <<< "$SELECTED_RESUME_JSON")
 
-# Шаг 2: Выбор режима поиска
-echo -e "\e[1mВыберите пособ поиска вакансий:\e[0m"
-echo "  1) Автоматический"
-echo "  2) Ручной"
+echo -e "\e[1mВыберите способ поиска вакансий:\e[0m"
+echo "  1) Автоматический (рекомендации hh.ru)"
+echo "  2) Ручной (поиск по ключевым словам)"
 echo
 IFS= read -r -p "> " SEARCH_MODE_CHOICE </dev/tty
 SEARCH_MODE_CHOICE=${SEARCH_MODE_CHOICE:-1}
@@ -250,18 +175,15 @@ SUMMARY_STRING=""
 VACANCIES_JSON_RAW=""
 
 if [[ "$SEARCH_MODE_CHOICE" -eq 1 ]]; then
-    # --- АВТОМАТИЧЕСКИЙ РЕЖИМ С ПОСТ-ФИЛЬТРАЦИЕЙ ---
     RESUME_TITLE=$(jq -r '.title' <<< "$SELECTED_RESUME_JSON")
     SUMMARY_STRING="Рекомендованные вакансии для резюме «$RESUME_TITLE»"
 
-    # -- Визард фильтров --
     DICTIONARIES=$(ensure_dictionaries_cache)
     filter_work_format_id=""
     filter_area_id=""
     filter_area_name=""
     filter_salary=""
 
-    # 1. Формат работы
     echo; echo -e "\e[1mВыберите формат:\e[0m"
     mapfile -t WORK_FORMAT_OPTS < <(jq -r '.work_format[] | "\(.id)\t\(.name)"' <<< "$DICTIONARIES")
     echo "  0) Любой"
@@ -277,10 +199,9 @@ if [[ "$SEARCH_MODE_CHOICE" -eq 1 ]]; then
         SUMMARY_STRING+=", формат: ${format_name,,}"
     fi
 
-    # 2. Город
     if [[ "${filter_work_format_id:-}" != "REMOTE" ]]; then
         echo; echo -e "\e[1mВыберите город:\e[0m"
-        RESUME_DATA_JSON=$(api_call "/resumes/$SELECTED_RESUME_ID") # Запрашиваем данные для города
+        RESUME_DATA_JSON=$(api_call "/resumes/$SELECTED_RESUME_ID")
         DEFAULT_AREA_ID=$(jq -r '.area.id // empty' <<< "$RESUME_DATA_JSON")
         DEFAULT_AREA_NAME=$(jq -r '.area.name // empty' <<< "$RESUME_DATA_JSON")
         if [[ -n "$DEFAULT_AREA_ID" && "$DEFAULT_AREA_NAME" != "null" ]]; then
@@ -307,12 +228,10 @@ if [[ "$SEARCH_MODE_CHOICE" -eq 1 ]]; then
     fi
     [[ -n "$filter_area_name" ]] && SUMMARY_STRING+=", регион: $filter_area_name"
 
-    # 3. Зарплата
     echo; echo -e "\e[1mЖелаемый уровень ЗП (Enter для пропуска)\e[0m"
     echo; IFS= read -r -p "> " filter_salary </dev/tty
     [[ -n "$filter_salary" ]] && SUMMARY_STRING+=", з/п от $filter_salary рублей"
     
-    # --- ЭТАП ПОЛУЧЕНИЯ И ФИЛЬТРАЦИИ ДАННЫХ ---
     clear
     final_summary="${SUMMARY_STRING}."
     summary_length=$(printf "%s" "$final_summary" | wc -m)
@@ -323,7 +242,6 @@ if [[ "$SEARCH_MODE_CHOICE" -eq 1 ]]; then
     VACANCIES_JSON_RAW=$(api_call "/resumes/$SELECTED_RESUME_ID/similar_vacancies" | jq '.items')
 
     echo "Пост-фильтрация полученных данных" >&2
-    # Применяем фильтры последовательно
     if [[ -n "$filter_work_format_id" ]]; then
         VACANCIES_JSON_RAW=$(jq --arg wf "$filter_work_format_id" '[.[] | select(any(.work_format[]; .id == $wf))]' <<< "$VACANCIES_JSON_RAW")
     fi
@@ -356,7 +274,6 @@ else
       for rid in "${ROLE_IDS[@]}"; do VAC_ARGS+=( professional_role="$rid" ); done
     fi
     
-    # Функция сбора вакансий для ручного режима
     collect_vacancies() {
       local pages; pages="$(api_call /vacancies "${VAC_ARGS[@]}" | jq -r '.pages // 1')"
       [[ "$pages" -gt 10 ]] && pages=10
@@ -369,25 +286,26 @@ else
     VACANCIES_JSON_RAW="$(collect_vacancies)"
 fi
 
-echo "Загрузка истории откликов" >&2
-PAGES="$(api_call /negotiations per_page=100 | jq -r '.pages // 1')"
+echo "Загрузка полной истории откликов..." >&2
+
+PAGES="$(api_call /negotiations status=all per_page=100 | jq -r '.pages // 0')"
+
 APPLIED_EMPLOYERS_JSON="$(
-  for p in $(seq 0 $((PAGES-1))); do
-    api_call /negotiations per_page=100 page="$p"; sleep 0.5;
-  done |
-  jq -s '[ .[] | .items[].vacancy.employer.id | tostring ] | unique'
+  if [[ "$PAGES" -gt 0 ]]; then
+    for p in $(seq 0 $((PAGES-1))); do
+      api_call /negotiations status=all per_page=100 page="$p"; sleep 0.2;
+    done
+  fi | jq -s '[ .[] | .items[]? | .vacancy.employer.id | tostring ] | map(select(. != null)) | unique'
 )"
 
+echo "История откликов загружена." >&2
+
 if [[ "${DEDUPE:-1}" -eq 1 ]]; then
-    # Шаг 1: Используем ОДИН jq-запрос для разделения исходного массива на два:
-    # .unique - вакансии, которые остаются
-    # .duplicates - вакансии, которые удаляются
     PROCESSED_JSON=$(jq '
       def norm: (tostring | ascii_downcase | gsub("[\r\n\t]+";" ") | gsub("[ ]+";" ") | gsub("^ | $";""));
       reduce .[] as $v ({seen:{}, unique: [], duplicates: []};
         (
           ($v.name // "" | norm) as $n |
-          # УЛУЧШЕННАЯ ЛОГИКА: Явно проверяем, что .employer существует, перед тем как лезть в .id
           (if $v.employer and $v.employer.id then ($v.employer.id | tostring) else ($v.employer.name // "") end | norm) as $e |
           ($n + "|" + $e) as $k |
           if .seen[$k] then .duplicates += [$v] else .seen[$k]=true | .unique += [$v] end
@@ -395,36 +313,23 @@ if [[ "${DEDUPE:-1}" -eq 1 ]]; then
       )
     ' <<< "$VACANCIES_JSON_RAW")
 
-    # Извлекаем уникальные вакансии для работы скрипта
     VACANCIES_JSON=$(jq '.unique' <<< "$PROCESSED_JSON")
-    
-    # Извлекаем дубликаты для отображения в отладке
     DUPLICATES_JSON=$(jq '.duplicates' <<< "$PROCESSED_JSON")
     DUPLICATES_COUNT=$(jq 'length' <<< "$DUPLICATES_JSON")
     if [[ "$DUPLICATES_COUNT" -gt 0 ]]; then
-        echo "Удалено дублей по сочетанию "название+компания": $DUPLICATES_COUNT шт." >&2
-        echo
-        echo "--- Список удаленных дублей ---" >&2
-        {
-          echo -e "Название вакансии\tКомпания\tСсылка"
-          jq -r '.[] | [.name, .employer.name // "Имя не указано", .alternate_url] | @tsv' <<< "$DUPLICATES_JSON"
-        } | column -t -s $'\t' >&2
-        echo "------------------------------" >&2
+        echo "Удалено дублей по сочетанию 'название+компания': $DUPLICATES_COUNT шт." >&2
     fi
 else
     VACANCIES_JSON="$VACANCIES_JSON_RAW"
 fi
 
-# Если ничего не найдено, выходим
 if [[ "$(jq 'length' <<< "$VACANCIES_JSON")" -eq 0 ]]; then
     echo "По вашему запросу ничего не найдено. Попробуйте изменить фильтры."
     exit 0
 fi
 
-
 ALL_ENTRIES="$( jq --argjson applied "$APPLIED_EMPLOYERS_JSON" -c 'to_entries | map(. as $e | { idx: ($e.key+1), id: $e.value.id, emp: ($e.value.employer.id|tostring), name: $e.value.name, employer_name: ($e.value.employer.name // "-"), url: $e.value.alternate_url, prev: ( ($applied | index(($e.value.employer.id|tostring))) != null ) })' <<< "$VACANCIES_JSON" )"
 
-# Функция предпросмотра
 render_preview() {
     local full_line="$1"
     local preview_width="$2"
@@ -445,19 +350,17 @@ render_preview() {
         rm -f "$cache_file"
         return
     fi
-    # Блок 1: Основная информация
+    
     echo "$vacancy_json" | jq -r '
     "Ссылка: \(.alternate_url)\n\n--- \(.name) ---\n\nРаботодатель: \(.employer.name)\n" +
     (if .area and .area.name then "Город: \(.area.name)\n" else "" end) +
     (if .salary then "Зарплата: \(.salary|if .from and .to then "\((.from|tostring))-\((.to|tostring)) \(.currency)" elif .from then "от \((.from|tostring)) \(.currency)" elif .to then "до \((.to|tostring)) \(.currency)" else "не указана" end)\n" else "" end) +
     "---"'
     
-    # Блок 2: Описание вакансии
     echo "$vacancy_json" |
     jq -r '.description // "[ Описание для этой вакансии недоступно через API ]"' |
     w3m -cols "$preview_width" -T text/html -dump
 
-    # Блок 3: Ключевые навыки
     echo "$vacancy_json" | jq -r '
       if .key_skills and (.key_skills | length > 0) then
         "\n\n--- Ключевые навыки ---\n" + (.key_skills | map(.name) | join(", "))
@@ -465,13 +368,11 @@ render_preview() {
         ""
       end'
       
-    # Блок 4: Контакты
     echo "$vacancy_json" | jq -r '
       if .contacts then
         "\n\n--- Контакты ---\n" +
         (if .contacts.name and .contacts.name != "null" then "Контактное лицо: \(.contacts.name)\n" else "" end) +
         (if .contacts.email then "Email: \(.contacts.email)\n" else "" end) +
-        # Обрабатываем массив телефонов
         (if .contacts.phones and (.contacts.phones | length > 0) then
           ( .contacts.phones[] | "Телефон: \(.formatted)\n" )
         else "" end)
@@ -483,8 +384,6 @@ render_preview() {
 export -f render_preview
 export -f api_call
 export CACHE_DIR
-
-# -------- ПОДГОТОВКА И ЗАПУСК FZF -----------
 
 FZF_MASTER_LIST=$(mktemp)
 FZF_TOGGLE_STATE=$(mktemp)
@@ -518,7 +417,7 @@ mapfile -t SELECTED_LINES < <(
   fzf --multi --ansi \
     $FZF_COLOR_OPTS \
     --marker='  ' \
-    --pointer='' \
+    --pointer='$' \
     --layout=reverse-list \
     --header-lines=2 \
     --prompt="$FZF_PROMPT" \
@@ -531,8 +430,6 @@ mapfile -t SELECTED_LINES < <(
 mapfile -t SELECTED_IDS < <( for line in "${SELECTED_LINES[@]}"; do cut -f1 <<< "$line"; done )
 
 if [[ ${#SELECTED_IDS[@]} -eq 0 ]]; then echo "Вакансии не выбраны. Завершение работы."; exit 0; fi
-
-# -------- ОТПРАВКА ОТКЛИКОВ --------
 
 VAC_COUNT=${#SELECTED_IDS[@]}
 RESUME_TITLE_FOR_PROMPT=$(jq -r .title <<< "$SELECTED_RESUME_JSON")
@@ -552,7 +449,6 @@ while true; do
     fi
 done
 
-# Используем ID резюме, выбранное на первом шаге
 RESUME_ID="$SELECTED_RESUME_ID"
 RESUME_TITLE=$(jq -r .title <<< "$SELECTED_RESUME_JSON")
 echo "Отклик с резюме: «${RESUME_TITLE}»"
@@ -577,7 +473,7 @@ if [[ -n "$CFG_PATH" && -f "$CFG_PATH" ]]; then
   UA_FROM_CFG="$(jq -r '.user_agent // empty' "$CFG_PATH" 2>/dev/null || true)"
   [[ -n "$UA_FROM_CFG" && "$UA_FROM_CFG" != "null" ]] && USER_AGENT="$UA_FROM_CFG"
 fi
-if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then echo "Не найден access_token. Запусти: hh-applicant-tool authorize" >&2; exit 4; fi
+if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then echo "Не найден access_token. Запусти: hhcli --auth" >&2; exit 4; fi
 
 http_post_negotiation() {
   local vacancy_id="$1"; local tmp_body; tmp_body="$(mktemp)"; local code;
@@ -606,11 +502,9 @@ while IFS= read -r row; do
   employer_name="$(jq -r '.employer_name' <<< "$row")"; url="$(jq -r '.url' <<< "$row")"; prev_applied="$(jq -r '.prev' <<< "$row")"
   prev_applied_human=$([[ "$prev_applied" == "true" ]] && echo "да" || echo "нет")
   
-  # Переменные для CSV
   sent="нет" 
   reason=""
 
-  # Переменные для вывода в консоль
   status_message=""
   action_prefix=""
   reason_text=""

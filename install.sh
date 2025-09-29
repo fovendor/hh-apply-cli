@@ -8,7 +8,7 @@ INSTALL_DIR="/usr/local/bin"
 EXECUTABLE_NAME="hhcli"
 CONFIG_DIR="$HOME/.config/hhcli"
 CONFIG_FILE="$CONFIG_DIR/config.sh"
-HHCLI_RAW_URL="https://raw.githubusercontent.com/fovendor/hhcli/main/hhcli"
+HHCLI_RAW_URL="https://raw.githubusercontent.com/fovendor/hhcli/install/hhcli"
 
 # --- ЦВЕТА И ФУНКЦИИ ВЫВОДА ---
 C_RESET='\033[0m'; C_RED='\033[0;31m'; C_GREEN='\033[0;32m'; C_YELLOW='\033[0;33m'; C_CYAN='\033[0;36m'
@@ -17,134 +17,142 @@ msg_ok() { echo -e "${C_GREEN} ✓ ${C_RESET} ${1}"; }
 msg_warn() { echo -e "${C_YELLOW} ! ${C_RESET} ${1}"; }
 msg_err() { echo -e "${C_RED} ✗ ${C_RESET} ${1}" >&2; }
 
-# --- ФУНКЦИЯ ОЧИСТКИ ---
-cleanup_old_versions() {
-    msg "Поиск и удаление старых версий..."
-    local old_system_files=("/usr/local/bin/hh-applicant-tool" "/usr/local/bin/hh-apply-cli")
-    local old_user_files=("$HOME/.local/bin/hhcli")
-    
-    for file_path in "${old_system_files[@]}"; do
-        if [ -f "$file_path" ]; then msg_warn "Найден старый системный файл: $file_path. Удаляем..."; sudo rm -f "$file_path" && msg_ok "Удалено."; fi
-    done
-    
-    for file_path in "${old_user_files[@]}"; do
-        if [ -f "$file_path" ]; then msg_warn "Найден старый пользовательский файл: $file_path. Удаляем..."; rm -f "$file_path" && msg_ok "Удалено."; fi
-    done
+# --- ОСНОВНЫЕ ФУНКЦИИ ---
+
+# Функция вывода помощи
+usage() {
+    echo "Использование: bash <(curl...) [install|uninstall]"
+    echo "  install    - Установить или обновить hhcli (действие по умолчанию)."
+    echo "  uninstall  - Полностью удалить hhcli и все его данные."
+    exit 1
 }
 
-# 1. Проверка и установка зависимостей (ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ)
-check_and_install_deps() {
-    msg "Проверка системных зависимостей..."
-    local missing_deps=()
-    local pkg_manager=""
-    local deps_to_check=("fzf" "jq" "w3m" "curl" "git" "python3")
+# Функция полной очистки
+uninstall_all() {
+    msg "Запуск полного удаления hhcli..."
 
-    if command -v apt-get &>/dev/null; then
-        pkg_manager="apt"; deps_to_check+=("python3-pip" "pipx" "qt6-qpa-plugins")
-    elif command -v dnf &>/dev/null; then
-        pkg_manager="dnf"; deps_to_check+=("python3-pip" "pipx" "qt6-qtbase-gui")
-    # ... другие менеджеры
+    msg "Удаление основного скрипта..."
+    if [ -f "$INSTALL_DIR/$EXECUTABLE_NAME" ]; then
+        sudo rm -f "$INSTALL_DIR/$EXECUTABLE_NAME"
+        msg_ok "Скрипт $EXECUTABLE_NAME удален."
     else
-        msg_err "Не удалось определить пакетный менеджер."; exit 1
+        msg_warn "Скрипт $EXECUTABLE_NAME не найден."
     fi
 
-    for dep in "${deps_to_check[@]}"; do
-        local is_missing=false
-        case "$dep" in
-            python3-pip)
-                ! python3 -m pip --version &>/dev/null && is_missing=true
-                ;;
-            pipx)
-                ! command -v pipx &>/dev/null && is_missing=true
-                ;;
-            qt6-qpa-plugins)
-                # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
-                # Используем более надежный метод dpkg -s
-                if [[ "$pkg_manager" == "apt" ]] && ! dpkg -s "$dep" &>/dev/null; then
-                    is_missing=true
-                fi
-                ;;
-            *) # Проверка для остальных команд
-                ! command -v "$dep" &>/dev/null && is_missing=true
-                ;;
-        esac
-        
-        if [[ "$is_missing" == true ]]; then
-            missing_deps+=("$dep")
-        fi
-    done
+    msg "Удаление бэкенда..."
+    if command -v pipx &> /dev/null; then
+        pipx uninstall "$PACKAGE_NAME" &>/dev/null || true
+        msg_ok "Пакет $PACKAGE_NAME удален."
+    fi
 
-    if [ ${#missing_deps[@]} -gt 0 ]; then
-        msg_warn "Требуются следующие пакеты: ${missing_deps[*]}"
-        read -p "Попробовать установить их автоматически? (y/N): " choice
-        if [[ "$choice" =~ ^[Yy]$ ]]; then
-            msg "Для установки требуются права администратора (sudo)..."
-            sudo apt-get update && sudo apt-get install -y "${missing_deps[@]}"
+    msg "Удаление конфигурационных файлов..."
+    rm -rf "$CONFIG_DIR"
+    rm -rf "$HOME/.config/hh-applicant-tool"
+    msg_ok "Конфигурации удалены."
+
+    msg "Удаление кэша и отчетов..."
+    rm -rf "$HOME/.cache/pm-search-cache"
+    rm -rf "$HOME/hh-reports"
+    msg_ok "Кэш и отчеты удалены."
+
+    echo
+    msg_ok "Полная очистка завершена."
+}
+
+# Основная функция установки
+install_all() {
+    msg "Запуск установки hhcli"
+    
+    # Внутренние функции установки
+    cleanup_old_versions() {
+        msg "Поиск и удаление старых версий и конфигов..."
+        local old_system_files=("/usr/local/bin/hh-applicant-tool" "/usr/local/bin/hh-apply-cli")
+        local old_user_files=("$HOME/.local/bin/hhcli")
+        if [ -f "$CONFIG_FILE" ]; then
+             msg_warn "Найден существующий конфиг hhcli. Он будет сохранен."
         else
-            msg_err "Установка прервана."; exit 1
+             # Удаляем старый конфиг бэкенда только если нет конфига hhcli
+             if [ -d "$HOME/.config/hh-applicant-tool" ]; then 
+                msg_warn "Найден старый конфиг бэкенда. Удаляем для чистой установки..."
+                rm -rf "$HOME/.config/hh-applicant-tool"
+                msg_ok "Удалено."
+             fi
         fi
-    fi
-    msg_ok "Все системные зависимости на месте."
-}
+        for file in "${old_system_files[@]}"; do if [ -f "$file" ]; then msg_warn "Найден старый файл: $file. Удаляем..."; sudo rm -f "$file" && msg_ok "Удалено."; fi; done
+        for file in "${old_user_files[@]}"; do if [ -f "$file" ]; then msg_warn "Найден старый файл: $file. Удаляем..."; rm -f "$file" && msg_ok "Удалено."; fi; done
+    }
 
+    check_and_install_deps() {
+        msg "Проверка системных зависимостей..."
+        local missing_deps=()
+        if command -v apt-get &>/dev/null; then
+            for dep in fzf jq w3m curl git python3 python3-pip pipx qt6-qpa-plugins; do
+                local is_missing=false
+                case "$dep" in
+                    qt6-qpa-plugins) ! dpkg -s "$dep" &>/dev/null && is_missing=true ;;
+                    python3-pip) ! python3 -m pip --version &>/dev/null && is_missing=true ;;
+                    *) ! command -v "$dep" &>/dev/null && is_missing=true ;;
+                esac
+                if $is_missing; then missing_deps+=("$dep"); fi
+            done
+        else
+            msg_err "Этот скрипт поддерживает только Debian/Ubuntu системы."; exit 1
+        fi
 
-# 2. Установка бэкенда
-install_backend() {
-    msg "Установка бэкенда $PACKAGE_NAME_WITH_EXTRA из PyPI..."
-    if [[ ! ":$PATH:" == *":$HOME/.local/bin:"* ]]; then export PATH="$PATH:$HOME/.local/bin"; fi
-    pipx ensurepath &>/dev/null
-    
-    msg "Переустановка бэкенда для включения поддержки GUI..."
-    pipx uninstall "$PACKAGE_NAME" &>/dev/null || true
-    pipx install "$PACKAGE_NAME_WITH_EXTRA"
+        if [ ${#missing_deps[@]} -gt 0 ]; then
+            msg_warn "Требуются следующие пакеты: ${missing_deps[*]}"
+            read -p "Попробовать установить их автоматически? (y/N): " choice
+            if [[ "$choice" =~ ^[Yy]$ ]]; then
+                msg "Для установки требуются права администратора (sudo)..."
+                sudo apt-get update && sudo apt-get install -y "${missing_deps[@]}"
+            else
+                msg_err "Установка прервана."; exit 1
+            fi
+        fi
+        msg_ok "Все системные зависимости на месте."
+    }
 
-    msg_ok "Бэкенд $PACKAGE_NAME успешно установлен с поддержкой GUI."
-}
+    install_backend() {
+        msg "Установка/обновление бэкенда $PACKAGE_NAME_WITH_EXTRA..."
+        pipx uninstall "$PACKAGE_NAME" &>/dev/null || true
+        pipx install "$PACKAGE_NAME_WITH_EXTRA"
+        msg_ok "Бэкенд успешно установлен с поддержкой GUI."
+    }
 
-# 3. Создание файла конфигурации
-setup_config() {
-    msg "Настройка пользовательской конфигурации..."
-    mkdir -p "$CONFIG_DIR"
-    if [ -f "$CONFIG_FILE" ]; then msg_ok "Файл конфигурации уже существует."; return; fi
+    setup_config() {
+        msg "Настройка пользовательской конфигурации..."
+        mkdir -p "$CONFIG_DIR"
+        if [ -f "$CONFIG_FILE" ]; then msg_ok "Файл конфигурации уже существует."; return; fi
+        msg "Создаем новый файл конфигурации..."
+        local temp_hhcli; temp_hhcli=$(mktemp)
+        if ! curl -sSLf -o "$temp_hhcli" "$HHCLI_RAW_URL"; then msg_err "Не удалось скачать hhcli из $HHCLI_RAW_URL."; exit 1; fi
+        local config_block; config_block=$(sed -n '/# ---------------------------- НАСТРОЙКИ ------------------------------------/,/# ------------------------ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ --------------------------/p' "$temp_hhcli" | sed '1d;$d')
+        rm "$temp_hhcli"
+        if [ -z "$config_block" ]; then msg_err "Не удалось извлечь блок настроек из hhcli."; exit 1; fi
+        echo -e "#!/usr/bin/env bash\n#\n# Файл конфигурации для hhcli\n#\n${config_block}" > "$CONFIG_FILE"
+        msg_ok "Файл конфигурации создан: $CONFIG_FILE"
+    }
 
-    msg "Создаем новый файл конфигурации..."
-    local config_block
-    config_block=$(curl -sSL "$HHCLI_RAW_URL" | sed -n '/# ---------------------------- НАСТРОЙКИ ------------------------------------/,/# ------------------------ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ --------------------------/p' | sed '1d;$d')
-    if [ -z "$config_block" ]; then msg_err "Не удалось извлечь блок настроек из URL: $HHCLI_RAW_URL"; exit 1; fi
-    echo -e "#!/usr/bin/env bash\n#\n# Файл конфигурации для hhcli\n#\n${config_block}" > "$CONFIG_FILE"
-    msg_ok "Файл конфигурации создан: $CONFIG_FILE"
-}
-
-# 4. Установка основного скрипта
-install_cli() {
-    msg "Установка основного скрипта hhcli..."
-    local temp_script; temp_script=$(mktemp)
-    
-    if ! curl -sSLf -o "$temp_script" "$HHCLI_RAW_URL"; then
-        msg_err "Не удалось скачать скрипт hhcli из $HHCLI_RAW_URL."; exit 1
-    fi
-
-    local modified_script; modified_script=$(mktemp)
-    local final_script; final_script=$(mktemp)
-
-    awk -v config_file="$CONFIG_FILE" 'BEGIN{p=1} /# ---------------------------- НАСТРОЙКИ ------------------------------------/{print "\n# --- ЗАГРУЗКА КОНФИГУРАЦИИ ---\n[ -f \""config_file"\" ] && source \""config_file"\"\n"; p=0} /# ------------------------ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ --------------------------/{p=1} p' "$temp_script" > "$modified_script"
-    sed -e "/case \"\$1\" in/a\\
+    install_cli() {
+        msg "Установка основного скрипта hhcli..."
+        local temp_script; temp_script=$(mktemp)
+        if ! curl -sSLf -o "$temp_script" "$HHCLI_RAW_URL"; then msg_err "Не удалось скачать скрипт hhcli из $HHCLI_RAW_URL."; exit 1; fi
+        local modified_script; modified_script=$(mktemp)
+        local final_script; final_script=$(mktemp)
+        awk -v config_file="$CONFIG_FILE" 'BEGIN{p=1} /# --- НАСТРОЙКИ ---/{print "\n# --- ЗАГРУЗКА КОНФИГУРАЦИИ ---\n[ -f \""config_file"\" ] && source \""config_file"\"\n"; p=0} /# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---/{p=1} p' "$temp_script" > "$modified_script"
+        sed -e "/case \"\$1\" in/a\\
     --auth) hh-applicant-tool authorize; exit 0;;\\
     --list-resumes) hh-applicant-tool list-resumes; exit 0;;\\
     proxy) shift; hh-applicant-tool \"\$@\"; exit 0;;
     " "$modified_script" > "$final_script"
+        msg "Установка hhcli в $INSTALL_DIR/$EXECUTABLE_NAME..."
+        chmod +x "$final_script"
+        if ! sudo mv "$final_script" "$INSTALL_DIR/$EXECUTABLE_NAME"; then msg_err "Не удалось переместить скрипт."; exit 1; fi
+        rm "$temp_script" "$modified_script"
+        msg_ok "Скрипт hhcli успешно установлен."
+    }
 
-    msg "Установка hhcli в $INSTALL_DIR/$EXECUTABLE_NAME..."
-    chmod +x "$final_script"
-    if ! sudo mv "$final_script" "$INSTALL_DIR/$EXECUTABLE_NAME"; then msg_err "Не удалось переместить скрипт."; exit 1; fi
-    
-    rm "$temp_script" "$modified_script"
-    msg_ok "Скрипт hhcli успешно установлен."
-}
-
-# --- ГЛАВНАЯ ФУНКЦИЯ ---
-main() {
-    msg "Запуск установки hhcli"
+    # Последовательность установки
     cleanup_old_versions
     check_and_install_deps
     install_backend
@@ -156,4 +164,22 @@ main() {
     echo -e "Теперь вы можете использовать команды:\n  ${C_YELLOW}hhcli${C_RESET}\n  ${C_YELLOW}hhcli --auth${C_RESET}\n  ${C_YELLOW}hhcli --list-resumes${C_RESET}\n\nДля настройки отредактируйте: ${C_YELLOW}${CONFIG_FILE}${C_RESET}"
 }
 
-main
+# --- МАРШРУТИЗАТОР КОМАНД ---
+main() {
+    ACTION="${1:-install}" # Действие по умолчанию - 'install'
+
+    case "$ACTION" in
+        install)
+            install_all
+            ;;
+        uninstall)
+            uninstall_all
+            ;;
+        *)
+            usage
+            ;;
+    esac
+}
+
+# Запуск с передачей всех аргументов
+main "$@"

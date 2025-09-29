@@ -412,7 +412,7 @@ mapfile -t SELECTED_LINES < <(
   fzf --multi --ansi \
     $FZF_COLOR_OPTS \
     --marker='  ' \
-    --pointer='' \
+    --pointer='$' \
     --layout=reverse-list \
     --header-lines=2 \
     --prompt="$FZF_PROMPT" \

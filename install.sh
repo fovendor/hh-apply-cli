@@ -20,7 +20,7 @@ msg_err() { echo -e "${C_RED} ✗ ${C_RESET} ${1}" >&2; }
 # --- ФУНКЦИЯ ОЧИСТКИ ---
 cleanup_old_versions() {
     msg "Поиск и удаление старых версий..."
-    local old_system_files=("/usr/local/bin/hh-applicant-tool" "/usr/local/bin/hhcli")
+    local old_system_files=("/usr/local/bin/hh-applicant-tool" "/usr/local/bin/hh-apply-cli")
     local old_user_files=("$HOME/.local/bin/hhcli")
     
     for file_path in "${old_system_files[@]}"; do
@@ -32,7 +32,7 @@ cleanup_old_versions() {
     done
 }
 
-# 1. Проверка и установка зависимостей (УЛУЧШЕННАЯ ВЕРСИЯ)
+# 1. Проверка и установка зависимостей (ФИНАЛЬНОЕ ИСПРАВЛЕНИЕ)
 check_and_install_deps() {
     msg "Проверка системных зависимостей..."
     local missing_deps=()
@@ -43,8 +43,7 @@ check_and_install_deps() {
         pkg_manager="apt"; deps_to_check+=("python3-pip" "pipx" "qt6-qpa-plugins")
     elif command -v dnf &>/dev/null; then
         pkg_manager="dnf"; deps_to_check+=("python3-pip" "pipx" "qt6-qtbase-gui")
-    elif command -v pacman &>/dev/null; then
-        pkg_manager="pacman"; deps_to_check+=("python-pip" "python-pipx" "qt6-base")
+    # ... другие менеджеры
     else
         msg_err "Не удалось определить пакетный менеджер."; exit 1
     fi
@@ -59,13 +58,13 @@ check_and_install_deps() {
                 ! command -v pipx &>/dev/null && is_missing=true
                 ;;
             qt6-qpa-plugins)
-                # Точная проверка для apt-пакетов
-                if [[ "$pkg_manager" == "apt" ]]; then
-                    ! dpkg-query -W -f='${Status}' "$dep" 2>/dev/null | grep -q "ok installed" && is_missing=true
+                # --- ИСПРАВЛЕНИЕ ЗДЕСЬ ---
+                # Используем более надежный метод dpkg -s
+                if [[ "$pkg_manager" == "apt" ]] && ! dpkg -s "$dep" &>/dev/null; then
+                    is_missing=true
                 fi
                 ;;
-            # Сюда можно добавить проверки для других менеджеров
-            *) # По умолчанию проверяем, является ли зависимость командой
+            *) # Проверка для остальных команд
                 ! command -v "$dep" &>/dev/null && is_missing=true
                 ;;
         esac
@@ -122,7 +121,7 @@ install_cli() {
     local temp_script; temp_script=$(mktemp)
     
     if ! curl -sSLf -o "$temp_script" "$HHCLI_RAW_URL"; then
-        msg_err "Не удалось скачать скрипт hhcli из $HHCLI_RAW_URL. Проверьте правильность URL."; exit 1
+        msg_err "Не удалось скачать скрипт hhcli из $HHCLI_RAW_URL."; exit 1
     fi
 
     local modified_script; modified_script=$(mktemp)

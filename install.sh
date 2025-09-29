@@ -19,7 +19,6 @@ msg_err() { echo -e "${C_RED} ✗ ${C_RESET} ${1}" >&2; }
 
 # --- ОСНОВНЫЕ ФУНКЦИИ ---
 
-# Функция вывода помощи
 usage() {
     echo "Использование: bash <(curl...) [install|uninstall]"
     echo "  install    - Установить или обновить hhcli (действие по умолчанию)."
@@ -59,24 +58,15 @@ uninstall_all() {
     msg_ok "Полная очистка завершена."
 }
 
-# Основная функция установки
 install_all() {
     msg "Запуск установки hhcli"
     
-    # Внутренние функции установки
     cleanup_old_versions() {
         msg "Поиск и удаление старых версий и конфигов..."
         local old_system_files=("/usr/local/bin/hh-applicant-tool" "/usr/local/bin/hh-apply-cli")
         local old_user_files=("$HOME/.local/bin/hhcli")
-        if [ -f "$CONFIG_FILE" ]; then
-             msg_warn "Найден существующий конфиг hhcli. Он будет сохранен."
-        else
-             # Удаляем старый конфиг бэкенда только если нет конфига hhcli
-             if [ -d "$HOME/.config/hh-applicant-tool" ]; then 
-                msg_warn "Найден старый конфиг бэкенда. Удаляем для чистой установки..."
-                rm -rf "$HOME/.config/hh-applicant-tool"
-                msg_ok "Удалено."
-             fi
+        if [ ! -f "$CONFIG_FILE" ] && [ -d "$HOME/.config/hh-applicant-tool" ]; then 
+            msg_warn "Найден старый конфиг бэкенда. Удаляем для чистой установки..."; rm -rf "$HOME/.config/hh-applicant-tool"; msg_ok "Удалено.";
         fi
         for file in "${old_system_files[@]}"; do if [ -f "$file" ]; then msg_warn "Найден старый файл: $file. Удаляем..."; sudo rm -f "$file" && msg_ok "Удалено."; fi; done
         for file in "${old_user_files[@]}"; do if [ -f "$file" ]; then msg_warn "Найден старый файл: $file. Удаляем..."; rm -f "$file" && msg_ok "Удалено."; fi; done
@@ -85,19 +75,24 @@ install_all() {
     check_and_install_deps() {
         msg "Проверка системных зависимостей..."
         local missing_deps=()
-        if command -v apt-get &>/dev/null; then
-            for dep in fzf jq w3m curl git python3 python3-pip pipx qt6-qpa-plugins; do
-                local is_missing=false
-                case "$dep" in
-                    qt6-qpa-plugins) ! dpkg -s "$dep" &>/dev/null && is_missing=true ;;
-                    python3-pip) ! python3 -m pip --version &>/dev/null && is_missing=true ;;
-                    *) ! command -v "$dep" &>/dev/null && is_missing=true ;;
-                esac
-                if $is_missing; then missing_deps+=("$dep"); fi
-            done
-        else
+        local deps_to_check=("fzf" "jq" "w3m" "curl" "git" "python3" "python3-pip" "pipx" "qt6-qpa-plugins")
+
+        if ! command -v apt-get &>/dev/null; then
             msg_err "Этот скрипт поддерживает только Debian/Ubuntu системы."; exit 1
         fi
+
+        for dep in "${deps_to_check[@]}"; do
+            local is_missing=false
+            case "$dep" in
+                python3-pip)
+                    ! python3 -m pip --version &>/dev/null && is_missing=true ;;
+                qt6-qpa-plugins)
+                    ! dpkg -s "$dep" &>/dev/null && is_missing=true ;;
+                *)
+                    ! command -v "$dep" &>/dev/null && is_missing=true ;;
+            esac
+            if $is_missing; then missing_deps+=("$dep"); fi
+        done
 
         if [ ${#missing_deps[@]} -gt 0 ]; then
             msg_warn "Требуются следующие пакеты: ${missing_deps[*]}"
@@ -166,20 +161,12 @@ install_all() {
 
 # --- МАРШРУТИЗАТОР КОМАНД ---
 main() {
-    ACTION="${1:-install}" # Действие по умолчанию - 'install'
-
+    ACTION="${1:-install}"
     case "$ACTION" in
-        install)
-            install_all
-            ;;
-        uninstall)
-            uninstall_all
-            ;;
-        *)
-            usage
-            ;;
+        install) install_all ;;
+        uninstall) uninstall_all ;;
+        *) usage ;;
     esac
 }
 
-# Запуск с передачей всех аргументов
 main "$@"

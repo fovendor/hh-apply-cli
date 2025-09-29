@@ -130,7 +130,6 @@ usage() {
 }
 
 uninstall_all() {
-    printf " %s Для удаления могут потребоваться права администратора...%s\n" "${C_CYAN}" "${C_RESET}"
     sudo -v || { printf "\n%sОшибка: не удалось получить права администратора.%s\n" "${C_RED}" "${C_RESET}"; exit 1; }
 
     mkdir -p "$LOG_DIR"
@@ -147,7 +146,6 @@ uninstall_all() {
 }
 
 install_all() {
-    printf " %s Для установки могут потребоваться права администратора...%s\n" "${C_CYAN}" "${C_RESET}"
     sudo -v || { printf "\n%sОшибка: не удалось получить права администратора.%s\n" "${C_RED}" "${C_RESET}"; exit 1; }
 
     mkdir -p "$LOG_DIR"

@@ -74,32 +74,37 @@ install_all() {
 
     check_and_install_deps() {
         msg "Проверка системных зависимостей..."
-        local missing_deps=()
-        local deps_to_check=("fzf" "jq" "w3m" "curl" "git" "python3" "python3-pip" "pipx" "qt6-qpa-plugins")
+        local missing_packages=()
 
         if ! command -v apt-get &>/dev/null; then
             msg_err "Этот скрипт поддерживает только Debian/Ubuntu системы."; exit 1
         fi
 
-        for dep in "${deps_to_check[@]}"; do
-            local is_missing=false
-            case "$dep" in
-                python3-pip)
-                    ! python3 -m pip --version &>/dev/null && is_missing=true ;;
-                qt6-qpa-plugins)
-                    ! dpkg -s "$dep" &>/dev/null && is_missing=true ;;
-                *)
-                    ! command -v "$dep" &>/dev/null && is_missing=true ;;
-            esac
-            if $is_missing; then missing_deps+=("$dep"); fi
+        # Список утилит, которые должны быть в системе
+        local required_cmds=("fzf" "jq" "w3m" "curl" "git" "python3" "pipx")
+        for cmd in "${required_cmds[@]}"; do
+            if ! command -v "$cmd" &>/dev/null; then
+                missing_packages+=("$cmd")
+            fi
         done
 
-        if [ ${#missing_deps[@]} -gt 0 ]; then
-            msg_warn "Требуются следующие пакеты: ${missing_deps[*]}"
+        # Отдельная проверка для python-pip, так как он не является системной утилитой
+        if ! python3 -m pip --version &>/dev/null; then
+            missing_packages+=("python3-pip")
+        fi
+
+        # Отдельная проверка для apt-пакета qt6
+        if ! dpkg -s "qt6-qpa-plugins" &>/dev/null; then
+            missing_packages+=("qt6-qpa-plugins")
+        fi
+
+        if [ ${#missing_packages[@]} -gt 0 ]; then
+            local unique_missing_packages=($(printf "%s\n" "${missing_packages[@]}" | sort -u))
+            msg_warn "Требуются следующие пакеты: ${unique_missing_packages[*]}"
             read -p "Попробовать установить их автоматически? (y/N): " choice
             if [[ "$choice" =~ ^[Yy]$ ]]; then
                 msg "Для установки требуются права администратора (sudo)..."
-                sudo apt-get update && sudo apt-get install -y "${missing_deps[@]}"
+                sudo apt-get update && sudo apt-get install -y "${unique_missing_packages[@]}"
             else
                 msg_err "Установка прервана."; exit 1
             fi

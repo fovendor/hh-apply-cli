@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- КОНСТАНТЫ И ПЕРЕМЕННЫЕ ---
 PACKAGE_NAME="hh-applicant-tool"
 PACKAGE_NAME_WITH_EXTRA="hh-applicant-tool[qt]"
 INSTALL_DIR="/usr/local/bin"
@@ -14,16 +13,13 @@ LOG_DIR="$CACHE_DIR"
 HHCLI_RAW_URL="https://raw.githubusercontent.com/fovendor/hhcli/install/hhcli"
 CONFIG_RAW_URL="https://raw.githubusercontent.com/fovendor/hhcli/install/config.sh"
 
-# --- ЦВЕТА ---
 C_RESET=$'\033[0m'; C_RED=$'\033[0;31m'; C_GREEN=$'\033[0;32m'; C_YELLOW=$'\033[0;33m'; C_CYAN=$'\033[0;36m'
 
-# --- ФУНКЦИИ ВЫВОДА (для лог-файла) ---
 msg() { echo "==> ${1}"; }
 msg_ok() { echo " ✓  ${1}"; }
 msg_warn() { echo " !  ${1}"; }
 msg_err() { echo " ✗  ${1}" >&2; }
 
-# --- SPINNER ANIMATION ---
 spinner() {
     local chars="/-\\|"
     while :; do
@@ -33,8 +29,6 @@ spinner() {
         done
     done
 }
-
-# --- Вспомогательные функции установки (теперь на верхнем уровне) ---
 
 cleanup_old_versions() {
     msg "Поиск и удаление старых версий и конфигов."
@@ -103,8 +97,6 @@ proxy) shift; hh-applicant-tool \"\$@\"; exit 0;;
     msg_ok "Скрипт hhcli успешно установлен."
 }
 
-# --- ОСНОВНЫЕ ФУНКЦИИ (ЛОГИКА) ---
-
 _uninstall_logic() {
     msg "Запуск полного удаления hhcli..."
     msg "Удаление основного скрипта..."
@@ -140,8 +132,6 @@ _install_logic() {
     msg "Установка завершена!"
 }
 
-# --- ФУНКЦИИ-КОНТРОЛЛЕРЫ (то, что видит пользователь) ---
-
 usage() {
     echo "Использование: bash <(curl...) [install|uninstall]"
     echo "  install    - Установить или обновить hhcli (действие по умолчанию)."
@@ -150,43 +140,61 @@ usage() {
 }
 
 uninstall_all() {
+    printf " %s Для удаления могут потребоваться права администратора...%s\n" "${C_CYAN}" "${C_RESET}"
+    sudo -v || { printf "\n%sОшибка: не удалось получить права администратора.%s\n" "${C_RED}" "${C_RESET}"; exit 1; }
+
     mkdir -p "$LOG_DIR"
     local log_file="$LOG_DIR/uninstall-$(date +'%Y%m%d-%H%M%S').log"
+    tput civis
+
     spinner &
     local spinner_pid=$!
-    trap 'kill $spinner_pid &>/dev/null; wait $spinner_pid &>/dev/null; printf "\r"; exit' INT TERM EXIT
+    trap "kill $spinner_pid &>/dev/null; wait $spinner_pid &>/dev/null; tput cnorm; printf \"\r\n\"; exit 1" INT TERM EXIT
+
     printf " %s Удаление hhcli" "${C_CYAN}"
+
     {
         _uninstall_logic
     } > "$log_file" 2>&1
+
+    trap - INT TERM EXIT
     kill $spinner_pid &>/dev/null; wait $spinner_pid &>/dev/null
+    tput cnorm
     printf "\r %s✔ Удаление hhcli завершено. %s\n" "${C_GREEN}" "${C_RESET}"
     printf " %s Подробности в лог-файле: %s%s%s\n" "${C_CYAN}" "${C_YELLOW}" "$log_file" "${C_RESET}"
-    trap - INT TERM EXIT
 }
 
 install_all() {
+    printf " %s Для установки могут потребоваться права администратора...%s\n" "${C_CYAN}" "${C_RESET}"
+    sudo -v || { printf "\n%sОшибка: не удалось получить права администратора.%s\n" "${C_RED}" "${C_RESET}"; exit 1; }
+
     mkdir -p "$LOG_DIR"
     local log_file="$LOG_DIR/install-$(date +'%Y%m%d-%H%M%S').log"
+    tput civis
+
     spinner &
     local spinner_pid=$!
-    trap 'kill $spinner_pid &>/dev/null; wait $spinner_pid &>/dev/null; printf "\r"; exit' INT TERM EXIT
+    trap "kill $spinner_pid &>/dev/null; wait $spinner_pid &>/dev/null; tput cnorm; printf \"\r\n\"; exit 1" INT TERM EXIT
+
     printf " %s Установка hhcli" "${C_CYAN}"
+
     {
         _install_logic
     } > "$log_file" 2>&1
+
+    trap - INT TERM EXIT
     kill $spinner_pid &>/dev/null; wait $spinner_pid &>/dev/null
+    tput cnorm
     printf "\r %s✔ Установка hhcli завершена. %s\n\n" "${C_GREEN}" "${C_RESET}"
+
     printf "Краткая справка:\n"
     printf "  Аутентификация в аккаунте на hh.ru: %s\n" "${C_YELLOW}hhcli --auth${C_RESET}"
     printf "  Вывод списка всех резюме: %s\n" "${C_YELLOW}hhcli --list-resumes${C_RESET}"
     printf "  Настройка конфигурации: nano %s\n" "${C_YELLOW}${CONFIG_FILE}${C_RESET}"
     printf "  Запуск программы: %s\n" "${C_YELLOW}hhcli${C_RESET}"
     printf "\n %s Подробности в лог-файле: %s%s%s\n" "${C_CYAN}" "${C_YELLOW}" "$log_file" "${C_RESET}"
-    trap - INT TERM EXIT
 }
 
-# --- МАРШРУТИЗАТОР КОМАНД ---
 main() {
     local ACTION="${1:-install}"
     case "$ACTION" in

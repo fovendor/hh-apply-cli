@@ -286,14 +286,19 @@ else
     VACANCIES_JSON_RAW="$(collect_vacancies)"
 fi
 
-echo "Загрузка истории откликов" >&2
-PAGES="$(api_call /negotiations per_page=100 | jq -r '.pages // 1')"
+echo "Загрузка полной истории откликов..." >&2
+
+PAGES="$(api_call /negotiations status=all per_page=100 | jq -r '.pages // 0')"
+
 APPLIED_EMPLOYERS_JSON="$(
-  for p in $(seq 0 $((PAGES-1))); do
-    api_call /negotiations per_page=100 page="$p"; sleep 0.5;
-  done |
-  jq -s '[ .[] | .items[].vacancy.employer.id | tostring ] | unique'
+  if [[ "$PAGES" -gt 0 ]]; then
+    for p in $(seq 0 $((PAGES-1))); do
+      api_call /negotiations status=all per_page=100 page="$p"; sleep 0.2;
+    done
+  fi | jq -s '[ .[] | .items[]? | .vacancy.employer.id | tostring ] | map(select(. != null)) | unique'
 )"
+
+echo "История откликов загружена." >&2
 
 if [[ "${DEDUPE:-1}" -eq 1 ]]; then
     PROCESSED_JSON=$(jq '

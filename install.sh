@@ -20,16 +20,6 @@ msg_ok() { echo " ✓  ${1}"; }
 msg_warn() { echo " !  ${1}"; }
 msg_err() { echo " ✗  ${1}" >&2; }
 
-spinner() {
-    local chars="/-\\|"
-    while :; do
-        for (( i=0; i<${#chars}; i++ )); do
-            printf "\r%s" "${chars:$i:1}"
-            sleep 0.1
-        done
-    done
-}
-
 cleanup_old_versions() {
     msg "Поиск и удаление старых версий и конфигов."
     local old_system_files=("/usr/local/bin/hh-applicant-tool" "/usr/local/bin/hh-apply-cli")
@@ -145,22 +135,14 @@ uninstall_all() {
 
     mkdir -p "$LOG_DIR"
     local log_file="$LOG_DIR/uninstall-$(date +'%Y%m%d-%H%M%S').log"
-    tput civis
 
-    spinner &
-    local spinner_pid=$!
-    trap "kill $spinner_pid &>/dev/null; wait $spinner_pid &>/dev/null; tput cnorm; printf \"\r\n\"; exit 1" INT TERM EXIT
-
-    printf " %s Удаление hhcli" "${C_CYAN}"
+    printf " %s Удаление hhcli...%s\n" "${C_CYAN}" "${C_RESET}"
 
     {
         _uninstall_logic
     } > "$log_file" 2>&1
 
-    trap - INT TERM EXIT
-    kill $spinner_pid &>/dev/null; wait $spinner_pid &>/dev/null
-    tput cnorm
-    printf "\r %s✔ Удаление hhcli завершено. %s\n" "${C_GREEN}" "${C_RESET}"
+    printf " %s✔ Удаление hhcli завершено. %s\n" "${C_GREEN}" "${C_RESET}"
     printf " %s Подробности в лог-файле: %s%s%s\n" "${C_CYAN}" "${C_YELLOW}" "$log_file" "${C_RESET}"
 }
 
@@ -170,22 +152,14 @@ install_all() {
 
     mkdir -p "$LOG_DIR"
     local log_file="$LOG_DIR/install-$(date +'%Y%m%d-%H%M%S').log"
-    tput civis
 
-    spinner &
-    local spinner_pid=$!
-    trap "kill $spinner_pid &>/dev/null; wait $spinner_pid &>/dev/null; tput cnorm; printf \"\r\n\"; exit 1" INT TERM EXIT
-
-    printf " %s Установка hhcli" "${C_CYAN}"
+    printf " %s Установка hhcli...%s\n" "${C_CYAN}" "${C_RESET}"
 
     {
         _install_logic
     } > "$log_file" 2>&1
 
-    trap - INT TERM EXIT
-    kill $spinner_pid &>/dev/null; wait $spinner_pid &>/dev/null
-    tput cnorm
-    printf "\r %s✔ Установка hhcli завершена. %s\n\n" "${C_GREEN}" "${C_RESET}"
+    printf " %s✔ Установка hhcli завершена. %s\n\n" "${C_GREEN}" "${C_RESET}"
 
     printf "Краткая справка:\n"
     printf "  Аутентификация в аккаунте на hh.ru: %s\n" "${C_YELLOW}hhcli --auth${C_RESET}"

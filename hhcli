@@ -10,7 +10,7 @@ fi
 
 usage() {
   cat <<'EOF'
-v.2.0.1
+v.2.1.1
 Использование: hhcli [опции]
   --prof-roles или -p   показать справочник профессиональных ролей
   --find-city           интерактивный поиск ID города для ручного режима
@@ -124,6 +124,9 @@ CACHE_DIR="$HOME/.cache/hhcli-cache"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+--auth) hh-applicant-tool authorize; exit 0;;
+--list-resumes) hh-applicant-tool list-resumes; exit 0;;
+proxy) shift; hh-applicant-tool "$@"; exit 0;;
     -p|--prof-roles) show_prof_roles; exit 0;;
     --cover) COVER_FILE="$2"; shift 2;;
     --clear-cache) rm -rf "$CACHE_DIR"; echo "Кэш очищен."; exit 0;;
@@ -290,12 +293,23 @@ echo "Загрузка полной истории откликов..." >&2
 
 PAGES="$(api_call /negotiations status=all per_page=100 | jq -r '.pages // 0')"
 
-APPLIED_EMPLOYERS_JSON="$(
+APPLIED_HISTORY_JSON="$(
   if [[ "$PAGES" -gt 0 ]]; then
     for p in $(seq 0 $((PAGES-1))); do
       api_call /negotiations status=all per_page=100 page="$p"; sleep 0.2;
     done
-  fi | jq -s '[ .[] | .items[]? | .vacancy.employer.id | tostring ] | map(select(. != null)) | unique'
+  fi | jq -s '
+    def norm: (tostring | ascii_downcase | gsub("[\r\n\t]+";" ") | gsub("[ ]+";" ") | gsub("^ | $";""));
+    [ .[] | .items[]? | select(.vacancy.id != null) ] | {
+        ids: [ .[].vacancy.id | tostring ],
+        keys: [ .[] | ((.vacancy.name // "" | norm) + "|" + (.vacancy.employer.name // "" | norm)) ],
+        emp_ids: [ .[].vacancy.employer.id | tostring ]
+    } | {
+        ids: (.ids | unique),
+        keys: (.keys | unique),
+        emp_ids: (.emp_ids | unique)
+    }
+  '
 )"
 
 echo "История откликов загружена." >&2
@@ -336,7 +350,25 @@ if [[ "$(jq 'length' <<< "$VACANCIES_JSON")" -eq 0 ]]; then
     exit 0
 fi
 
-ALL_ENTRIES="$( jq --argjson applied "$APPLIED_EMPLOYERS_JSON" -c 'to_entries | map(. as $e | { idx: ($e.key+1), id: $e.value.id, emp: ($e.value.employer.id|tostring), name: $e.value.name, employer_name: ($e.value.employer.name // "-"), url: $e.value.alternate_url, prev: ( ($applied | index(($e.value.employer.id|tostring))) != null ) })' <<< "$VACANCIES_JSON" )"
+ALL_ENTRIES="$( jq --argjson history "$APPLIED_HISTORY_JSON" -c '
+  def norm: (tostring | ascii_downcase | gsub("[\r\n\t]+";" ") | gsub("[ ]+";" ") | gsub("^ | $";""));
+  to_entries | map(
+    . as $e |
+    ($e.value.id | tostring) as $vac_id |
+    (($e.value.name // "" | norm) + "|" + ($e.value.employer.name // "" | norm)) as $vac_key |
+    {
+      idx: ($e.key+1),
+      id: $vac_id,
+      emp: ($e.value.employer.id | tostring),
+      name: $e.value.name,
+      employer_name: ($e.value.employer.name // "-"),
+      url: $e.value.alternate_url,
+      prev: ( ($history.emp_ids | index(($e.value.employer.id|tostring))) != null ),
+      applied_by_id: ( ($history.ids | index($vac_id)) != null ),
+      applied_by_key: ( ($history.keys | index($vac_key)) != null )
+    }
+  )
+' <<< "$VACANCIES_JSON" )"
 
 render_preview() {
     local full_line="$1"
@@ -398,15 +430,27 @@ FZF_TOGGLE_STATE=$(mktemp)
 trap 'rm -f "$FZF_MASTER_LIST" "$FZF_TOGGLE_STATE"' EXIT
 echo "0" > "$FZF_TOGGLE_STATE"
 
-jq -r '.[] | [ .id, .url, .name, .employer_name, .prev, .idx ] | @tsv' <<< "$ALL_ENTRIES" |
-while IFS=$'\t' read -r id url name employer_name prev idx; do
+jq -r '.[] | [ .id, .url, .name, .employer_name, .prev, .idx, .applied_by_id, .applied_by_key ] | @tsv' <<< "$ALL_ENTRIES" |
+while IFS=$'\t' read -r id url name employer_name prev idx applied_by_id applied_by_key; do
   prev_applied_human=$([[ "$prev" == "true" ]] && echo "да" || echo "нет")
   COL_ID="$(format_cell "#$idx" "$MAX_ID")"
   COL_TITLE="$(format_cell "$name" "$MAX_TITLE")"
   COL_COMPANY="$(format_cell "$employer_name" "$MAX_COMPANY")"
   COL_STATUS="$(format_cell "$prev_applied_human" "$MAX_STATUS")"
-  printf "%s\t%s\t%s %s %s %s\n" \
-    "$id" "$url" "$COL_ID" "$COL_TITLE" "$COL_COMPANY" "$COL_STATUS" >> "$FZF_MASTER_LIST"
+  DISPLAY_LINE=$(printf "%s %s %s %s" "$COL_ID" "$COL_TITLE" "$COL_COMPANY" "$COL_STATUS")
+
+  should_strike=0
+  if [[ "${STRIKETHROUGH_APPLIED_VAC:-0}" -eq 1 && "$applied_by_id" == "true" ]]; then
+      should_strike=1
+  fi
+  if [[ "${STRIKETHROUGH_APPLIED_VAC_NAME:-0}" -eq 1 && "$applied_by_key" == "true" ]]; then
+      should_strike=1
+  fi
+  if [[ "$should_strike" -eq 1 ]]; then
+      DISPLAY_LINE=$'\e[9m'"$DISPLAY_LINE"$'\e[0m'
+  fi
+
+  printf "%s\t%s\t%s\n" "$id" "$url" "$DISPLAY_LINE" >> "$FZF_MASTER_LIST"
 done
 
 HEADER=$(printf "%s %s %s %s" "$(format_cell "№" "$MAX_ID")" "$(format_cell "Название вакансии" "$MAX_TITLE")" "$(format_cell "Компания" "$MAX_COMPANY")" "$(format_cell "Ранее" "$MAX_STATUS")")

@@ -10,8 +10,8 @@ CONFIG_FILE="$CONFIG_DIR/config.sh"
 CACHE_DIR="$HOME/.cache/hhcli-cache"
 LOG_DIR="$CACHE_DIR"
 
-HHCLI_RAW_URL="https://raw.githubusercontent.com/fovendor/hhcli/install/hhcli"
-CONFIG_RAW_URL="https://raw.githubusercontent.com/fovendor/hhcli/install/config.sh"
+HHCLI_RAW_URL="https://raw.githubusercontent.com/fovendor/hhcli/dedupe-fix/hhcli"
+CONFIG_RAW_URL="https://raw.githubusercontent.com/fovendor/hhcli/dedupe-fix/config.sh"
 
 C_RESET=$'\033[0m'; C_RED=$'\033[0;31m'; C_GREEN=$'\033[0;32m'; C_YELLOW=$'\033[0;33m'; C_CYAN=$'\033[0;36m'
 

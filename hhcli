@@ -398,6 +398,7 @@ FZF_TOGGLE_STATE=$(mktemp)
 trap 'rm -f "$FZF_MASTER_LIST" "$FZF_TOGGLE_STATE"' EXIT
 echo "0" > "$FZF_TOGGLE_STATE"
 
+jq -r '.[] | [ .id, .url, .name, .employer_name, .prev, .idx ] | @tsv' <<< "$ALL_ENTRIES" |
 while IFS=$'\t' read -r id url name employer_name prev idx; do
   prev_applied_human=$([[ "$prev" == "true" ]] && echo "да" || echo "нет")
   COL_ID="$(format_cell "#$idx" "$MAX_ID")"
@@ -406,7 +407,7 @@ while IFS=$'\t' read -r id url name employer_name prev idx; do
   COL_STATUS="$(format_cell "$prev_applied_human" "$MAX_STATUS")"
   printf "%s\t%s\t%s %s %s %s\n" \
     "$id" "$url" "$COL_ID" "$COL_TITLE" "$COL_COMPANY" "$COL_STATUS" >> "$FZF_MASTER_LIST"
-done < <(jq -r '.[] | [ .id, .url, .name, .employer_name, .prev, .idx ] | @tsv' <<< "$ALL_ENTRIES")
+done
 
 HEADER=$(printf "%s %s %s %s" "$(format_cell "№" "$MAX_ID")" "$(format_cell "Название вакансии" "$MAX_TITLE")" "$(format_cell "Компания" "$MAX_COMPANY")" "$(format_cell "Ранее" "$MAX_STATUS")")
 SEPARATOR="$(printf "%.0s-" $(seq 1 200))"

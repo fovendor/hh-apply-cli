@@ -10,7 +10,7 @@ fi
 
 usage() {
   cat <<'EOF'
-v.2.0.0
+v.2.0.1
 Использование: hhcli [опции]
   --prof-roles или -p   показать справочник профессиональных ролей
   --find-city           интерактивный поиск ID города для ручного режима
@@ -306,6 +306,7 @@ if [[ "${DEDUPE:-1}" -eq 1 ]]; then
       reduce .[] as $v ({seen:{}, unique: [], duplicates: []};
         (
           ($v.name // "" | norm) as $n |
+          # УЛУЧШЕННАЯ ЛОГИКА: Явно проверяем, что .employer существует, перед тем как лезть в .id
           (if $v.employer and $v.employer.id then ($v.employer.id | tostring) else ($v.employer.name // "") end | norm) as $e |
           ($n + "|" + $e) as $k |
           if .seen[$k] then .duplicates += [$v] else .seen[$k]=true | .unique += [$v] end
@@ -317,7 +318,14 @@ if [[ "${DEDUPE:-1}" -eq 1 ]]; then
     DUPLICATES_JSON=$(jq '.duplicates' <<< "$PROCESSED_JSON")
     DUPLICATES_COUNT=$(jq 'length' <<< "$DUPLICATES_JSON")
     if [[ "$DUPLICATES_COUNT" -gt 0 ]]; then
-        echo "Удалено дублей по сочетанию 'название+компания': $DUPLICATES_COUNT шт." >&2
+        echo "Удалено дублей по сочетанию "название+компания": $DUPLICATES_COUNT шт." >&2
+        echo >&2
+        echo "--- Список удаленных дублей ---" >&2
+        {
+          echo -e "Название вакансии\tКомпания\tСсылка"
+          jq -r '.[] | [.name, .employer.name // "Имя не указано", .alternate_url] | @tsv' <<< "$DUPLICATES_JSON"
+        } | column -t -s $'\t' >&2
+        echo "------------------------------" >&2
     fi
 else
     VACANCIES_JSON="$VACANCIES_JSON_RAW"

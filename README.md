@@ -19,7 +19,7 @@
 Установка производится одной командой в терминале. Инсталлятор автоматически проверит зависимости, установит нужные компоненты, создаст файл конфигурации и нужные для работы программы системные каталоги.
 
 ```bash
-bash <(curl -sSL -H "Cache-Control: no-cache" https://raw.githubusercontent.com/fovendor/hhcli/install/install.sh) install
+bash <(curl -sSL -H "Cache-Control: no-cache" https://raw.githubusercontent.com/fovendor/hhcli/master/install.sh) install
 ```
 
 ## Удаление
@@ -27,7 +27,7 @@ bash <(curl -sSL -H "Cache-Control: no-cache" https://raw.githubusercontent.com/
 Для полного удаления программы, ее конфигурационных файлов, кэша и бэкенда выполните команду:
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/fovendor/hhcli/install/install.sh) uninstall
+bash <(curl -sSL https://raw.githubusercontent.com/fovendor/hhcli/master/install.sh) uninstall
 ```
 
 ## Первый запуск и настройка

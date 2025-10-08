@@ -1,8 +1,8 @@
 import os
 import sys
-import json
 from hhcli.client import HHApiClient
 from hhcli.database import init_db, set_active_profile, get_active_profile_name
+from hhcli.tui import HHCliApp
 
 CLIENT_ID = os.getenv("HH_CLIENT_ID")
 CLIENT_SECRET = os.getenv("HH_CLIENT_SECRET")
@@ -17,7 +17,7 @@ def run():
 
     args = sys.argv[1:]
 
-    # --- Обработка команды --auth ---
+    # Обработка команды --auth
     if "--auth" in args:
         try:
             profile_index = args.index("--auth") + 1
@@ -30,36 +30,31 @@ def run():
             print(f"Профиль '{profile_name}' успешно создан и активирован.")
         except IndexError:
             print("Ошибка: после --auth необходимо указать имя профиля. Например: hhcli --auth my_account")
-        return # Завершаем работу после аутентификации
+        return
 
-    # --- Основная логика запуска ---
+    # Основная логика запуска
     active_profile = get_active_profile_name()
     if not active_profile:
         print("Активный профиль не выбран. Пожалуйста, сначала войдите в аккаунт:")
         print("  hhcli --auth <имя_профиля>")
         return
-
-    print(f"--- hhcli v0.2.1 (Профиль: {active_profile}) ---")
     
     client = HHApiClient(client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
     try:
         client.load_profile_data(active_profile)
     except ValueError as e:
         print(f"Ошибка: {e}")
-        # Это может случиться, если активный профиль был удален вручную
-        print("Попробуйте войти заново с помощью --auth <имя_профиля>")
         return
 
-    # Проверка на истекший токен будет выполнена автоматически при первом запросе
-    print(f"Аутентифицированы как '{active_profile}'. Используется токен из БД.")
-
-    print("\n--- Тестовый запрос: получение списка резюме ---")
-    try:
-        resumes = client.get_my_resumes()
-        print(json.dumps(resumes, indent=2, ensure_ascii=False))
-        print("\nТестовый запрос успешно выполнен!")
-    except Exception as e:
-        print(f"\nОшибка при выполнении запроса к API: {e}")
+    # Создаем и запускаем TUI-приложение, передавая ему весь API-клиент
+    app = HHCliApp(client=client)
+    
+    # app.run() может вернуть результат (например, ошибку), который мы можем обработать
+    result = app.run()
+    
+    if result:
+        # Если TUI завершился с ошибкой, выводим ее в консоль
+        print(f"\n[ОШИБКА] {result}")
 
 if __name__ == "__main__":
     run()

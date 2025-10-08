@@ -174,3 +174,12 @@ class HHApiClient:
     def get_my_resumes(self):
         """Получает список резюме текущего пользователя."""
         return self._request("GET", "/resumes/mine")
+
+    def logout(self):
+        """Удаляет файл с токеном и сбрасывает состояние клиента."""
+        if os.path.exists(self._token_path):
+            os.remove(self._token_path)
+            print("Файл с токеном удален. Потребуется новая аутентификация.")
+        self.access_token = None
+        self.refresh_token = None
+        self.token_expires_at = None

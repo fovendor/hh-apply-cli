@@ -1,4 +1,5 @@
 import os
+import sys  # ИМПОРТИРУЕМ sys для доступа к аргументам командной строки
 import json
 from hhcli.client import HHApiClient
 
@@ -15,8 +16,15 @@ def run():
         print("Ошибка: не установлены переменные окружения HH_CLIENT_ID и HH_CLIENT_SECRET.")
         print("Пожалуйста, установите их перед запуском.")
         return
-
+    
+    # Определяем, нужно ли принудительно запускать аутентификацию
+    force_auth = "--auth" in sys.argv
+    
     client = HHApiClient(client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
+
+    if force_auth:
+        print("Запрошена принудительная аутентификация...")
+        client.logout()
 
     if not client.is_authenticated():
         print("Токен не найден или истек. Запускаю аутентификацию...")

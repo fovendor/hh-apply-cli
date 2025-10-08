@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 from platformdirs import user_data_dir
 from sqlalchemy import (create_engine, MetaData, Table, Column, 
-                        Integer, String, DateTime, JSON, # Добавляем тип JSON
+                        Integer, String, DateTime, JSON,
                         insert, select, delete, update)
 
 # --- Конфигурация БД (без изменений) ---
@@ -97,8 +97,6 @@ def save_or_update_profile(profile_name: str, user_info: dict, token_data: dict,
             connection.execute(stmt_insert)
         connection.commit()
 
-# ... load_profile, delete_profile, set_active_profile, get_active_profile_name без изменений ...
-
 def load_profile(profile_name: str) -> dict | None:
     with engine.connect() as connection:
         stmt = select(profiles).where(profiles.c.profile_name == profile_name)
@@ -112,6 +110,12 @@ def delete_profile(profile_name: str):
         stmt = delete(profiles).where(profiles.c.profile_name == profile_name)
         connection.execute(stmt)
         connection.commit()
+
+def get_all_profiles() -> list[dict]:
+    with engine.connect() as connection:
+        stmt = select(profiles)
+        result = connection.execute(stmt).fetchall()
+        return [dict(row._mapping) for row in result]
 
 def set_active_profile(profile_name: str):
     with engine.connect() as connection:

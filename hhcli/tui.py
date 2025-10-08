@@ -2,8 +2,50 @@ from textual.app import App, ComposeResult
 from textual.screen import Screen
 from textual.widgets import Header, Footer, DataTable, Static
 from textual.binding import Binding
+from textual.events import Key
 
-# --- Экран №2: Выбор режима поиска ---
+from hhcli.database import get_all_profiles, set_active_profile
+
+class ProfileSelectionScreen(Screen):
+    """Экран для выбора одного из сохраненных профилей."""
+
+    BINDINGS = [
+        Binding("q", "quit", "Выход", priority=True),
+        Binding("й", "quit", "Выход (RU)", show=False, priority=True),
+    ]
+
+    def __init__(self, all_profiles: list[dict]):
+        super().__init__()
+        self.all_profiles = all_profiles
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True, name="hh-cli")
+        yield Static("[b]Выберите профиль для работы:[/b]\n")
+        yield DataTable(id="profile_table", cursor_type="row")
+        yield Footer()
+    
+    def on_mount(self) -> None:
+        table = self.query_one(DataTable)
+        table.add_columns("Имя профиля", "Email")
+        for profile in self.all_profiles:
+            table.add_row(
+                f"[bold green]{profile['profile_name']}[/]",
+                profile['email'],
+                key=profile['profile_name']
+            )
+    
+    def on_data_table_row_selected(self, event) -> None:
+        """Обработчик выбора профиля."""
+        profile_name = event.row_key.value
+        set_active_profile(profile_name)
+        self.dismiss(profile_name)
+
+    def on_key(self, event: Key) -> None:
+        """Обрабатывает нажатие клавиш на этом экране."""
+        if event.key == "escape":
+            # Предотвращаем стандартное поведение (выход с экрана),
+            # чтобы избежать пустого экрана.
+            event.prevent_default()
 
 class SearchModeScreen(Screen):
     """Экран для выбора режима поиска вакансий."""
@@ -39,6 +81,7 @@ class ResumeSelectionScreen(Screen):
 
     BINDINGS = [
         Binding("q", "quit", "Выход", priority=True),
+        Binding("й", "quit", "Выход (RU)", show=False, priority=True),
     ]
 
     def __init__(self, resume_data: dict):
@@ -84,29 +127,61 @@ class ResumeSelectionScreen(Screen):
         
         self.app.push_screen(SearchModeScreen(resume_id=resume_id, resume_title=resume_title))
 
-
-# --- Основной класс приложения ---
-
 class HHCliApp(App):
     """Главное TUI-приложение."""
 
     SCREENS = {
+        "profile_select": ProfileSelectionScreen,
         "resume_select": ResumeSelectionScreen,
         "search_mode": SearchModeScreen,
     }
     
     BINDINGS = [
-        ("q", "quit", "Выход"),
+        Binding("q", "quit", "Выход"),
+        Binding("й", "quit", "Выход (RU)", show=False),
     ]
 
     def __init__(self, client):
         super().__init__()
         self.client = client
 
-    def on_mount(self) -> None:
-        """При старте приложения получаем данные и показываем первый экран."""
+    async def on_mount(self) -> None:
+        """При старте приложения решает, какой экран показать первым."""
+        all_profiles = get_all_profiles()
+        
+        if not all_profiles:
+            self.exit(result="В базе не найдено ни одного профиля. Пожалуйста, войдите в аккаунт, используя флаг --auth <имя_профиля>.")
+            return
+        
+        if len(all_profiles) == 1:
+            # Если профиль всего один, выбираем его автоматически
+            profile_name = all_profiles[0]['profile_name']
+            set_active_profile(profile_name)
+            await self.proceed_with_profile(profile_name)
+        else:
+            # Если профилей несколько, показываем экран выбора
+            # self.push_screen() вернет результат, когда экран закроется через self.dismiss()
+            self.push_screen(
+                ProfileSelectionScreen(all_profiles),
+                self.on_profile_selected
+            )
+            
+    async def on_profile_selected(self, selected_profile: str) -> None:
+        """Колбэк, который вызывается после выбора профиля на экране."""
+        if selected_profile:
+            await self.proceed_with_profile(selected_profile)
+        else:
+            # Пользователь нажал Q на экране выбора профиля
+            self.exit()
+
+    async def proceed_with_profile(self, profile_name: str) -> None:
+        """Загружает данные профиля и переходит к выбору резюме."""
         try:
+            self.client.load_profile_data(profile_name)
+            self.sub_title = f"Профиль: {profile_name}"
+            
             resumes = self.client.get_my_resumes()
+            
             if len(resumes.get("items", [])) == 1:
                 resume = resumes["items"][0]
                 self.push_screen(

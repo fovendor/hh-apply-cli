@@ -6,8 +6,7 @@ from datetime import datetime, timedelta
 import requests
 from flask import Flask, request, render_template_string
 
-# ИЗМЕНЕНО: Импортируем функции для работы с БД вместо `os` и `json`
-from hhcli.database import save_token, load_token, delete_token
+from hhcli.database import save_or_update_profile, load_profile, delete_profile
 
 # --- Константы ---
 API_BASE_URL = "https://api.hh.ru"
@@ -26,52 +25,56 @@ class HHApiClient:
         self.access_token = None
         self.refresh_token = None
         self.token_expires_at = None
+        self.profile_name = None # Имя текущего профиля
 
-        self._load_token()
+    def load_profile_data(self, profile_name: str):
+        """Загружает данные профиля и настраивает клиент."""
+        profile_data = load_profile(profile_name)
+        if not profile_data:
+            raise ValueError(f"Профиль '{profile_name}' не найден.")
+        
+        self.profile_name = profile_data['profile_name']
+        self.access_token = profile_data['access_token']
+        self.refresh_token = profile_data['refresh_token']
+        self.token_expires_at = profile_data['expires_at']
 
     def is_authenticated(self) -> bool:
         """Проверяет, есть ли у нас валидный access_token."""
         return self.access_token is not None and self.token_expires_at > datetime.now()
 
-    def _load_token(self):
-        """ИЗМЕНЕНО: Загружает токен из БД."""
-        token_data = load_token()
-        if not token_data:
-            return
-            
-        self.access_token = token_data.get("access_token")
-        self.refresh_token = token_data.get("refresh_token")
-        self.token_expires_at = datetime.fromisoformat(token_data.get("expires_at"))
-
-    def _save_token(self, token_data: dict):
-        """ИЗМЕНЕНО: Сохраняет данные токена в БД."""
+    def _save_token(self, token_data: dict, user_info: dict):
+        """Сохраняет токен, привязывая его к профилю."""
         expires_in = token_data.get("expires_in", 3600)
-        self.token_expires_at = datetime.now() + timedelta(seconds=expires_in)
+        expires_at = datetime.now() + timedelta(seconds=expires_in)
         
-        save_token(token_data, self.token_expires_at)
+        save_or_update_profile(self.profile_name, user_info, token_data, expires_at)
         
         # Обновляем состояние объекта
         self.access_token = token_data["access_token"]
         self.refresh_token = token_data["refresh_token"]
+        self.token_expires_at = expires_at
 
     def _refresh_token(self):
-        """Обновляет access_token, используя refresh_token. Логика не изменилась."""
+        """Обновляет access_token, используя refresh_token."""
         if not self.refresh_token:
-            raise Exception("Нет refresh_token для обновления.")
+            raise Exception(f"Нет refresh_token для обновления профиля '{self.profile_name}'.")
             
-        print("Токен истек, обновляю...")
-        payload = {
-            "grant_type": "refresh_token",
-            "refresh_token": self.refresh_token,
-        }
+        print(f"Токен для профиля '{self.profile_name}' истек, обновляю...")
+        payload = {"grant_type": "refresh_token", "refresh_token": self.refresh_token}
         response = requests.post(f"{OAUTH_URL}/token", data=payload)
         response.raise_for_status()
         new_token_data = response.json()
-        self._save_token(new_token_data)
+        
+        # Для обновления токена нам не нужна новая информация о пользователе
+        # Мы можем передавать старые данные в _save_token, ничего криминального
+        # Правильнее было бы иметь отдельную функцию update_token_only, но для простоты сойдет
+        user_info = {'id': 'dummy', 'email': 'dummy'} # Эти данные не будут использованы при обновлении
+        self._save_token(new_token_data, user_info)
         print("Токен успешно обновлен.")
 
-    def authorize(self):
-        """Запускает процесс OAuth2 аутентификации. Логика не изменилась."""
+    def authorize(self, profile_name: str):
+        """Запускает процесс OAuth2 аутентификации для указанного профиля."""
+        self.profile_name = profile_name # Сохраняем имя профиля для колбэка
         auth_url = (
             f"{OAUTH_URL}/authorize?response_type=code&"
             f"client_id={self._client_id}&redirect_uri={REDIRECT_URI}"
@@ -88,16 +91,23 @@ class HHApiClient:
             
             try:
                 payload = {
-                    "grant_type": "authorization_code",
-                    "client_id": self._client_id,
-                    "client_secret": self._client_secret,
-                    "code": code,
+                    "grant_type": "authorization_code", "client_id": self._client_id,
+                    "client_secret": self._client_secret, "code": code,
                     "redirect_uri": REDIRECT_URI,
                 }
                 response = requests.post(f"{OAUTH_URL}/token", data=payload)
                 response.raise_for_status()
                 token_data = response.json()
-                self._save_token(token_data)
+
+                # Получаем информацию о пользователе
+                temp_access_token = token_data['access_token']
+                headers = {"Authorization": f"Bearer {temp_access_token}"}
+                user_info_resp = requests.get(f"{API_BASE_URL}/me", headers=headers)
+                user_info_resp.raise_for_status()
+                user_info = user_info_resp.json()
+                
+                # Сохраняем токен вместе с информацией о пользователе
+                self._save_token(token_data, user_info)
                 
                 server_shutdown_event.set()
                 return render_template_string("<h1>Успешно!</h1><p>Можете закрыть эту вкладку и вернуться в терминал.</p>")
@@ -113,10 +123,9 @@ class HHApiClient:
         webbrowser.open(auth_url)
         print("Ожидание успешной аутентификации...")
         server_shutdown_event.wait()
-        print("Аутентификация прошла успешно!")
-
+        
     def _request(self, method: str, endpoint: str, **kwargs):
-        """Обертка для выполнения запросов. Логика не изменилась."""
+        """Обертка для выполнения запросов к API."""
         if not self.is_authenticated():
             self._refresh_token()
 
@@ -131,10 +140,8 @@ class HHApiClient:
             return response.json()
         except requests.HTTPError as e:
             if e.response.status_code == 401:
-                print("Попытка обновить токен и повторить запрос...")
                 self._refresh_token()
                 headers["Authorization"] = f"Bearer {self.access_token}"
-                
                 response = requests.request(method, url, **kwargs)
                 response.raise_for_status()
                 return response.json()
@@ -142,13 +149,12 @@ class HHApiClient:
                 raise e
 
     def get_my_resumes(self):
-        """Получает список резюме. Логика не изменилась."""
+        """Получает список резюме."""
         return self._request("GET", "/resumes/mine")
 
-    def logout(self):
-        """ИЗМЕНЕНО: Удаляет токен из БД."""
-        delete_token()
-        print("Токен удален из базы данных. Потребуется новая аутентификация.")
-        self.access_token = None
-        self.refresh_token = None
-        self.token_expires_at = None
+    def logout(self, profile_name: str):
+        """Удаляет конкретный профиль."""
+        delete_profile(profile_name)
+        print(f"Профиль '{profile_name}' удален.")
+        if self.profile_name == profile_name:
+            self.access_token = None

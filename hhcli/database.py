@@ -1,84 +1,109 @@
 import os
 from datetime import datetime
 from platformdirs import user_data_dir
-from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String, DateTime, insert, select, delete
+from sqlalchemy import (create_engine, MetaData, Table, Column, 
+                        Integer, String, DateTime,
+                        insert, select, delete, update)
 
-# --- Определение пути к БД и ее структуры ---
-
-# Кроссплатформенное определение пути к директории с данными
+# --- Конфигурация БД ---
 APP_NAME = "hhcli"
 APP_AUTHOR = "fovendor"
 DATA_DIR = user_data_dir(APP_NAME, APP_AUTHOR)
-DB_PATH = os.path.join(DATA_DIR, "hhcli.sqlite")
 
-# SQLAlchemy будет управлять соединением с БД
+DB_FILENAME = "hhcli_v1.sqlite" 
+DB_PATH = os.path.join(DATA_DIR, DB_FILENAME)
+
 engine = None
-# Метаданные - это реестр, который знает обо всех таблицах.
 metadata = MetaData()
 
-# Таблица для хранения токенов аутентификации
-# Пока у нас один профиль, id будет всегда равен 1
-auth_tokens = Table(
-    "auth_tokens",
+# --- Новая схема таблиц ---
+
+# Таблица для хранения профилей/аккаунтов
+profiles = Table(
+    "profiles",
     metadata,
-    Column("id", Integer, primary_key=True),
+    # Имя профиля, которое задает пользователь, например, "fovendor"
+    Column("profile_name", String, primary_key=True),
+    # Уникальный ID пользователя с hh.ru, чтобы избежать дублей
+    Column("hh_user_id", String, unique=True, nullable=False),
+    Column("email", String), # Email для удобства отображения
     Column("access_token", String, nullable=False),
     Column("refresh_token", String, nullable=False),
     Column("expires_at", DateTime, nullable=False),
 )
 
+# Простая таблица для хранения состояния приложения, например, какой профиль активен
+app_state = Table(
+    "app_state",
+    metadata,
+    Column("key", String, primary_key=True),
+    Column("value", String),
+)
+
 # --- Функции для работы с БД ---
 
 def init_db():
-    """
-    Инициализирует соединение с БД и создает таблицы, если они не существуют.
-    """
+    """Инициализирует соединение с БД и создает таблицы, если они не существуют."""
     global engine
-    
-    # Создаем директорию для данных, если ее нет
     os.makedirs(DATA_DIR, exist_ok=True)
-    
-    # Создаем движок, который будет работать с нашим файлом БД
     engine = create_engine(f"sqlite:///{DB_PATH}")
-    
-    # Эта команда создает все таблицы, если они еще не созданы.
-    # Безопасна для повторного вызова.
     metadata.create_all(engine)
 
-def save_token(token_data: dict, expires_at: datetime):
-    """Сохраняет или обновляет токен в БД."""
+def save_or_update_profile(profile_name: str, user_info: dict, token_data: dict, expires_at: datetime):
+    """Сохраняет или обновляет данные профиля (логика UPSERT)."""
     with engine.connect() as connection:
-        # Сначала удаляем старый токен, если он есть (простейшая логика upsert)
-        stmt_delete = delete(auth_tokens).where(auth_tokens.c.id == 1)
-        connection.execute(stmt_delete)
-        
-        # Вставляем новый
-        stmt_insert = insert(auth_tokens).values(
-            id=1,
-            access_token=token_data["access_token"],
-            refresh_token=token_data["refresh_token"],
-            expires_at=expires_at
-        )
-        connection.execute(stmt_insert)
+        # Проверяем, существует ли уже профиль с таким hh_user_id
+        stmt = select(profiles).where(profiles.c.hh_user_id == user_info['id'])
+        existing = connection.execute(stmt).first()
+
+        values = {
+            "hh_user_id": user_info['id'],
+            "email": user_info.get('email', ''),
+            "access_token": token_data["access_token"],
+            "refresh_token": token_data["refresh_token"],
+            "expires_at": expires_at,
+        }
+
+        if existing:
+            # Если пользователь уже есть (возможно, под другим именем профиля), обновляем его
+            stmt_update = update(profiles).where(profiles.c.hh_user_id == user_info['id']).values(
+                profile_name=profile_name, **values
+            )
+            connection.execute(stmt_update)
+        else:
+            # Если нет, вставляем новую запись
+            stmt_insert = insert(profiles).values(profile_name=profile_name, **values)
+            connection.execute(stmt_insert)
         connection.commit()
 
-def load_token() -> dict | None:
-    """Загружает токен из БД."""
+def load_profile(profile_name: str) -> dict | None:
+    """Загружает данные конкретного профиля."""
     with engine.connect() as connection:
-        stmt = select(auth_tokens).where(auth_tokens.c.id == 1)
+        stmt = select(profiles).where(profiles.c.profile_name == profile_name)
         result = connection.execute(stmt).first()
-        
         if result:
-            return {
-                "access_token": result.access_token,
-                "refresh_token": result.refresh_token,
-                "expires_at": result.expires_at.isoformat() # Возвращаем в том же формате, что и было в JSON
-            }
+            return dict(result._mapping)
         return None
 
-def delete_token():
-    """Удаляет токен из БД."""
+def delete_profile(profile_name: str):
+    """Удаляет профиль."""
     with engine.connect() as connection:
-        stmt = delete(auth_tokens).where(auth_tokens.c.id == 1)
+        stmt = delete(profiles).where(profiles.c.profile_name == profile_name)
         connection.execute(stmt)
         connection.commit()
+
+def set_active_profile(profile_name: str):
+    """Устанавливает активный профиль."""
+    with engine.connect() as connection:
+        # Удаляем старую запись, если она есть (логика UPSERT)
+        connection.execute(delete(app_state).where(app_state.c.key == "active_profile"))
+        # Вставляем новую
+        connection.execute(insert(app_state).values(key="active_profile", value=profile_name))
+        connection.commit()
+
+def get_active_profile_name() -> str | None:
+    """Получает имя активного профиля."""
+    with engine.connect() as connection:
+        stmt = select(app_state.c.value).where(app_state.c.key == "active_profile")
+        result = connection.execute(stmt).scalar_one_or_none()
+        return result

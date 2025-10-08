@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "hhcli"
-version = "0.1.0"
+version = "0.2.0"
 description = "Консольная утилита для удобного поиска вакансий и откликов на hh.ru."
 authors = ["Your Name <you@example.com>"]
 readme = "README.md"
@@ -12,6 +12,7 @@ python = "^3.9"
 requests = "^2.31.0"
 flask = "^3.0.0"
 platformdirs = "^4.0.0"
+sqlalchemy = "^2.0.23" # НОВАЯ ЗАВИСИМОСТЬ
 
 [tool.poetry.group.dev.dependencies]
 ruff = "^0.1.6"

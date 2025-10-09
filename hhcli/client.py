@@ -152,6 +152,34 @@ class HHApiClient:
         """Получает список резюме."""
         return self._request("GET", "/resumes/mine")
 
+    def get_similar_vacancies(self, resume_id: str, page: int = 0, per_page: int = 50):
+        """Получает рекомендованные вакансии для резюме (автоматический поиск)."""
+        params = {"page": page, "per_page": per_page}
+        return self._request("GET", f"/resumes/{resume_id}/similar_vacancies", params=params)
+
+    def search_vacancies(self, config: dict, page: int = 0, per_page: int = 50):
+        """Выполняет поиск вакансий по параметрам из конфига (ручной поиск)."""
+        # Собираем параметры для запроса из нашего конфига
+        params = {
+            "text": f"{config['text_include']} NOT ({config['negative']})",
+            "area": config['area_id'],
+            "professional_role": config['role_ids_config'].split(','),
+            "search_field": config['search_field'],
+            "period": config['period'],
+            "order_by": "publication_time",
+            "page": page,
+            "per_page": per_page,
+        }
+        # Добавляем формат работы, если он указан
+        if config.get('work_format') and config['work_format'] != "ANY":
+            params['schedule'] = config['work_format'].lower()
+            
+        return self._request("GET", "/vacancies", params=params)
+
+    def get_vacancy_details(self, vacancy_id: str):
+        """Получает полную информацию по одной вакансии."""
+        return self._request("GET", f"/vacancies/{vacancy_id}")
+
     def logout(self, profile_name: str):
         """Удаляет конкретный профиль."""
         delete_profile(profile_name)

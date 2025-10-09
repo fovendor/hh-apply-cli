@@ -15,8 +15,6 @@ class VacancyListScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Назад", show=True),
-        Binding("q", "quit", "Выход", priority=True),
-        Binding("й", "quit", "Выход (RU)", show=False, priority=True),
     ]
 
     def __init__(self, vacancies: list[dict]):
@@ -115,10 +113,17 @@ class VacancyListScreen(Screen):
 class SearchModeScreen(Screen):
     """Экран выбора режима поиска: автоматический или ручной."""
 
-    def __init__(self, resume_id: str, resume_title: str):
+    BINDINGS = [
+        Binding("1", "run_search('auto')", "Авто", show=False),
+        Binding("2", "run_search('manual')", "Ручной", show=False),
+        Binding("escape", "handle_escape", "Назад/Выход", show=True),
+    ]
+
+    def __init__(self, resume_id: str, resume_title: str, is_root_screen: bool = False):
         super().__init__()
         self.resume_id = resume_id
         self.resume_title = resume_title
+        self.is_root_screen = is_root_screen
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True, name="hh-cli")
@@ -128,17 +133,16 @@ class SearchModeScreen(Screen):
         yield Static("  [yellow]2)[/] Ручной (поиск по ключевым словам)")
         yield Footer()
 
-    async def on_key(self, event: Key) -> None:
-        if event.key == "1":
-            log_to_db("INFO", "SearchModeScreen", "Выбран автоматический режим поиска.")
-            await self.run_search(mode="auto")
-        elif event.key == "2":
-            log_to_db("INFO", "SearchModeScreen", "Выбран ручной режим поиска.")
-            await self.run_search(mode="manual")
-        elif event.key == "escape":
+    def action_handle_escape(self) -> None:
+        """Обрабатывает нажатие Escape: выходит из приложения, если это корневой экран, иначе возвращается назад."""
+        if self.is_root_screen:
+            self.app.exit()
+        else:
             self.app.pop_screen()
 
-    async def run_search(self, mode: str):
+    async def action_run_search(self, mode: str) -> None:
+        """Запускает поиск вакансий в выбранном режиме."""
+        log_to_db("INFO", "SearchModeScreen", f"Выбран '{mode}' режим поиска.")
         self.app.notify("Идет поиск вакансий...", title="Загрузка", timeout=10)
         try:
             if mode == "auto":
@@ -157,11 +161,6 @@ class SearchModeScreen(Screen):
 
 class ResumeSelectionScreen(Screen):
     """Экран выбора одного из резюме пользователя."""
-
-    BINDINGS = [
-        Binding("q", "quit", "Выход", priority=True),
-        Binding("й", "quit", "Выход (RU)", show=False, priority=True),
-    ]
 
     def __init__(self, resume_data: dict):
         super().__init__()
@@ -199,16 +198,12 @@ class ResumeSelectionScreen(Screen):
                 break
 
         log_to_db("INFO", "ResumeScreen", f"Выбрано резюме ID: {resume_id}, Название: '{resume_title}'.")
-        self.app.push_screen(SearchModeScreen(resume_id=resume_id, resume_title=resume_title))
+        # is_root_screen=False, так как мы переходим с другого экрана
+        self.app.push_screen(SearchModeScreen(resume_id=resume_id, resume_title=resume_title, is_root_screen=False))
 
 
 class ProfileSelectionScreen(Screen):
     """Экран выбора профиля, если их в базе несколько."""
-
-    BINDINGS = [
-        Binding("q", "quit", "Выход", priority=True),
-        Binding("й", "quit", "Выход (RU)", show=False, priority=True),
-    ]
 
     def __init__(self, all_profiles: list[dict]):
         super().__init__()
@@ -260,8 +255,8 @@ class HHCliApp(App):
     }
 
     BINDINGS = [
-        Binding("q", "quit", "Выход"),
-        Binding("й", "quit", "Выход (RU)", show=False),
+        Binding("q", "quit", "Выход", show=True, priority=True),
+        Binding("й", "quit", "Выход (RU)", show=False, priority=True),
     ]
 
     def __init__(self, client):
@@ -301,13 +296,22 @@ class HHCliApp(App):
             self.client.load_profile_data(profile_name)
             self.sub_title = f"Профиль: {profile_name}"
 
+            self.app.notify("Синхронизация истории откликов...", title="Синхронизация", timeout=20)
+            self.run_worker(self.client.sync_negotiation_history, thread=True, name="SyncWorker")
+
             log_to_db("INFO", "TUI", f"Загрузка резюме для профиля '{profile_name}'.")
             resumes = self.client.get_my_resumes()
             
-            if len(resumes.get("items", [])) == 1:
-                resume = resumes["items"][0]
+            items = resumes.get("items", [])
+            if len(items) == 1:
+                resume = items[0]
                 log_to_db("INFO", "TUI", "Найдено одно резюме, переход к выбору режима поиска.")
-                self.push_screen(SearchModeScreen(resume_id=resume['id'], resume_title=resume['title']))
+                # is_root_screen=True, так как это первый интерактивный экран
+                self.push_screen(SearchModeScreen(
+                    resume_id=resume['id'], 
+                    resume_title=resume['title'], 
+                    is_root_screen=True
+                ))
             else:
                 log_to_db("INFO", "TUI", "Найдено несколько резюме, переход к экрану выбора.")
                 self.push_screen(ResumeSelectionScreen(resume_data=resumes))
@@ -316,5 +320,6 @@ class HHCliApp(App):
             self.exit(result=e)
 
     def action_quit(self) -> None:
+        """Действие для выхода из приложения."""
         log_to_db("INFO", "TUI", "Пользователь запросил выход из приложения.")
-        super().action_quit()
+        self.exit()

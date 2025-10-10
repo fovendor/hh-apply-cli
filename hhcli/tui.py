@@ -1,15 +1,18 @@
 import html
 import re
+import html2text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.events import Key
 from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, LoadingIndicator, Static
+from textual.widgets import (DataTable, Footer, Header, LoadingIndicator, Static,
+                            Markdown)
 
 from hhcli.database import (get_all_profiles, set_active_profile,
                             load_profile_config, log_to_db,
-                            save_vacancy_to_cache, get_vacancy_from_cache)
+                            save_vacancy_to_cache, get_vacancy_from_cache,
+                            get_full_negotiation_history_for_profile)
 
 
 class VacancyListScreen(Screen):
@@ -22,6 +25,16 @@ class VacancyListScreen(Screen):
     def __init__(self, vacancies: list[dict]):
         super().__init__()
         self.vacancies = vacancies
+        self.html_converter = html2text.HTML2Text()
+        self.html_converter.body_width = 0
+        self.html_converter.ignore_links = False
+        self.html_converter.ignore_images = True
+        self.html_converter.mark_code = True
+
+    def _normalize(self, text: str | None) -> str:
+        if not text:
+            return ""
+        return " ".join(str(text).lower().split())
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True, name="hh-cli")
@@ -29,7 +42,7 @@ class VacancyListScreen(Screen):
             yield DataTable(
                 id="vacancy_table", cursor_type="row", zebra_stripes=True)
             with VerticalScroll(id="details_pane"):
-                yield Static(
+                yield Markdown(
                     "[dim]Выберите вакансию в списке слева "
                     "для просмотра деталей.[/dim]",
                     id="vacancy_details")
@@ -45,37 +58,54 @@ class VacancyListScreen(Screen):
             self.query_one(LoadingIndicator).display = False
             return
 
+        profile_name = self.app.client.profile_name
+        config = load_profile_config(profile_name)
+        history = get_full_negotiation_history_for_profile(profile_name)
+
+        applied_ids = {item['vacancy_id'] for item in history}
+        applied_keys = {
+            f"{self._normalize(item['vacancy_title'])}|"
+            f"{self._normalize(item['employer_name'])}"
+            for item in history
+        }
+
         for i, vacancy in enumerate(self.vacancies):
             salary = vacancy.get('salary')
             salary_str = "[dim]не указана[/dim]"
             if salary:
                 currency = salary.get('currency', '').upper()
-                s_from = salary.get('from')
-                s_to = salary.get('to')
+                s_from, s_to = salary.get('from'), salary.get('to')
                 if s_from and s_to:
-                    salary_str = f"{s_from:,} - {s_to:,} {currency}".replace(
-                        ",", " ")
+                    salary_str = f"{s_from:,} - {s_to:,} {currency}".replace(",", " ")
                 elif s_from:
                     salary_str = f"от {s_from:,} {currency}".replace(",", " ")
                 elif s_to:
                     salary_str = f"до {s_to:,} {currency}".replace(",", " ")
 
+            vacancy_name = vacancy['name']
+            should_strike = False
+            if config.get("strikethrough_applied_vac") and vacancy['id'] in applied_ids:
+                should_strike = True
+            if not should_strike and config.get("strikethrough_applied_vac_name"):
+                current_key = (f"{self._normalize(vacancy['name'])}|"
+                               f"{self._normalize(vacancy['employer']['name'])}")
+                if current_key in applied_keys:
+                    should_strike = True
+
+            if should_strike:
+                vacancy_name = f"[s]{vacancy_name}[/s]"
+
             table.add_row(
-                str(i + 1),
-                vacancy['name'],
-                vacancy['employer']['name'],
-                salary_str,
-                key=vacancy['id']
+                str(i + 1), vacancy_name, vacancy['employer']['name'],
+                salary_str, key=vacancy['id']
             )
         self.query_one(LoadingIndicator).display = False
 
-    def on_data_table_row_highlighted(
-            self, event: DataTable.RowHighlighted) -> None:
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         vacancy_id = event.row_key.value
         if vacancy_id:
-            log_to_db(
-                "INFO", "VacancyListScreen",
-                f"Просмотр деталей для вакансии ID: {vacancy_id}.")
+            log_to_db("INFO", "VacancyListScreen",
+                      f"Просмотр деталей для вакансии ID: {vacancy_id}.")
             self.update_vacancy_details(vacancy_id)
 
     def update_vacancy_details(self, vacancy_id: str) -> None:
@@ -93,8 +123,7 @@ class VacancyListScreen(Screen):
         self.run_worker(
             self.fetch_vacancy_details(vacancy_id),
             exclusive=True,
-            thread=True
-        )
+            thread=True)
 
     async def fetch_vacancy_details(self, vacancy_id: str) -> None:
         try:
@@ -107,28 +136,34 @@ class VacancyListScreen(Screen):
                 f"Ошибка загрузки деталей для вакансии {vacancy_id}: {e}")
             self.app.call_from_thread(
                 self.query_one("#vacancy_details").update,
-                f"Ошибка загрузки: {e}"
-            )
+                f"Ошибка загрузки: {e}")
 
     def display_vacancy_details(self, details: dict) -> None:
         description_text = details.get('description', '')
-        clean_description = html.unescape(re.sub('<[^<]+?>', '', description_text))
+        formatted_description = self.html_converter.handle(
+            html.unescape(description_text)
+        ).strip()
 
         key_skills_list = details.get('key_skills', [])
-        key_skills = ", ".join([skill['name'] for skill in key_skills_list])
+        skills_text = "* " + "\n* ".join(
+            [skill['name'] for skill in key_skills_list]
+        ) if key_skills_list else "Не указаны"
 
-        text_to_display = f"""[bold cyan]Вакансия:[/bold cyan] {details['name']}
-[bold cyan]Компания:[/bold cyan] {details['employer']['name']}
-[bold cyan]Ссылка:[/bold cyan] [u]{details['alternate_url']}[/u]
----
-[bold]Ключевые навыки:[/bold]
-{key_skills or '[dim]Не указаны[/dim]'}
----
-[bold]Описание:[/bold]
+        document_to_display = f"""\
+# {details['name']}
 
-{clean_description[:2000]}{'...' if len(clean_description) > 2000 else ''}
+**Компания:** {details['employer']['name']}
+
+**Ссылка:** {details['alternate_url']}
+
+**Ключевые навыки:**
+{skills_text}
+
+**Описание:**
+
+{formatted_description}
 """
-        self.query_one("#vacancy_details").update(text_to_display)
+        self.query_one("#vacancy_details").update(document_to_display)
         self.query_one(LoadingIndicator).display = False
         self.query_one("#details_pane").scroll_home(animate=False)
 

@@ -2,7 +2,7 @@ import os
 import json
 from datetime import datetime
 from platformdirs import user_data_dir
-from sqlalchemy import (create_engine, MetaData, Table, Column, 
+from sqlalchemy import (create_engine, MetaData, Table, Column,
                         Integer, String, DateTime, JSON, Text,
                         insert, select, delete, update)
 from sqlalchemy.sql import func
@@ -18,6 +18,7 @@ engine = None
 metadata = MetaData()
 
 def get_default_config():
+    """Возвращает стандартную конфигурацию поиска для нового профиля."""
     return {
         "text_include": "Python developer",
         "negative": " старший | senior | ведущий | Middle | ETL | BI | ML | Data Scientist | CV | NLP | Unity | Unreal | C# | C\\+\\+ | Golang | PHP | DevOps | AQA | QA | тестировщик | аналитик | analyst | маркетолог | менеджер | руководитель | стажер | intern | junior | джуниор",
@@ -38,17 +39,24 @@ profiles = Table(
     Column("access_token", String, nullable=False),
     Column("refresh_token", String, nullable=False),
     Column("expires_at", DateTime, nullable=False),
-    Column("config_json", JSON, default=get_default_config),
+    Column("config_json", JSON, default=get_default_config)
 )
-app_state = Table("app_state", metadata, Column("key", String, primary_key=True), Column("value", String))
+
+app_state = Table(
+    "app_state", metadata,
+    Column("key", String, primary_key=True),
+    Column("value", String)
+)
+
 app_logs = Table(
     "app_logs", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("timestamp", DateTime, server_default=func.now()),
     Column("level", String(10), nullable=False),
     Column("source", String(50)),
-    Column("message", Text),
+    Column("message", Text)
 )
+
 negotiation_history = Table(
     "negotiation_history", metadata,
     Column("vacancy_id", String, primary_key=True),
@@ -57,19 +65,21 @@ negotiation_history = Table(
     Column("employer_name", String),
     Column("status", String),
     Column("reason", String),
-    Column("applied_at", DateTime, nullable=False),
+    Column("applied_at", DateTime, nullable=False)
 )
+
 vacancy_cache = Table(
     "vacancy_cache", metadata,
     Column("vacancy_id", String, primary_key=True),
     Column("json_data", JSON, nullable=False),
-    Column("cached_at", DateTime, nullable=False),
+    Column("cached_at", DateTime, nullable=False)
 )
+
 dictionaries_cache = Table(
     "dictionaries_cache", metadata,
     Column("name", String, primary_key=True),
     Column("json_data", JSON, nullable=False),
-    Column("cached_at", DateTime, nullable=False),
+    Column("cached_at", DateTime, nullable=False)
 )
 
 def init_db():
@@ -79,19 +89,35 @@ def init_db():
     engine = create_engine(f"sqlite:///{DB_PATH}")
     metadata.create_all(engine)
 
-# Функции для логирования и синхронизации
 def log_to_db(level: str, source: str, message: str):
-    """Записывает лог в базу данных."""
     if not engine:
-        print(f"DB NOT READY [LOG]: {level}/{source}: {message}")
         return
     with engine.connect() as connection:
         stmt = insert(app_logs).values(level=level, source=source, message=message)
         connection.execute(stmt)
         connection.commit()
 
+def record_apply_action(vacancy_id: str, profile_name: str, vacancy_title: str, employer_name: str, status: str, reason: str | None):
+    values = {
+        "vacancy_id": vacancy_id, "profile_name": profile_name,
+        "vacancy_title": vacancy_title, "employer_name": employer_name,
+        "status": status, "reason": reason, "applied_at": datetime.now(),
+    }
+    stmt = sqlite_insert(negotiation_history).values(**values)
+    stmt = stmt.on_conflict_do_update(index_elements=['vacancy_id'], set_=values)
+    with engine.connect() as connection:
+        connection.execute(stmt)
+        connection.commit()
+
+def get_full_negotiation_history_for_profile(profile_name: str) -> list[dict]:
+    with engine.connect() as connection:
+        stmt = select(negotiation_history).where(
+            negotiation_history.c.profile_name == profile_name
+        ).order_by(negotiation_history.c.applied_at.desc())
+        result = connection.execute(stmt).fetchall()
+        return [dict(row._mapping) for row in result]
+
 def get_last_sync_timestamp(profile_name: str) -> datetime | None:
-    """Получает время последней синхронизации откликов для профиля."""
     with engine.connect() as connection:
         key = f"last_negotiation_sync_{profile_name}"
         stmt = select(app_state.c.value).where(app_state.c.key == key)
@@ -101,7 +127,6 @@ def get_last_sync_timestamp(profile_name: str) -> datetime | None:
         return None
 
 def set_last_sync_timestamp(profile_name: str, timestamp: datetime):
-    """Устанавливает время последней синхронизации откликов для профиля."""
     with engine.connect() as connection:
         key = f"last_negotiation_sync_{profile_name}"
         value = timestamp.isoformat()
@@ -111,7 +136,6 @@ def set_last_sync_timestamp(profile_name: str, timestamp: datetime):
         connection.commit()
 
 def upsert_negotiation_history(negotiations: list[dict], profile_name: str):
-    """Добавляет или обновляет записи в истории откликов."""
     if not negotiations:
         return
     with engine.connect() as connection:
@@ -120,7 +144,8 @@ def upsert_negotiation_history(negotiations: list[dict], profile_name: str):
             if not vacancy or not vacancy.get('id'):
                 continue
             values = {
-                "vacancy_id": vacancy['id'], "profile_name": profile_name,
+                "vacancy_id": vacancy['id'],
+                "profile_name": profile_name,
                 "vacancy_title": vacancy.get('name'),
                 "employer_name": vacancy.get('employer', {}).get('name'),
                 "status": item.get('state', {}).get('name', 'N/A'),
@@ -142,7 +167,7 @@ def save_or_update_profile(profile_name: str, user_info: dict, token_data: dict,
         values = {
             "hh_user_id": user_info['id'], "email": user_info.get('email', ''),
             "access_token": token_data["access_token"], "refresh_token": token_data["refresh_token"],
-            "expires_at": expires_at,
+            "expires_at": expires_at
         }
         if existing:
             stmt_update = update(profiles).where(profiles.c.hh_user_id == user_info['id']).values(profile_name=profile_name, **values)
@@ -157,7 +182,9 @@ def load_profile(profile_name: str) -> dict | None:
     with engine.connect() as connection:
         stmt = select(profiles).where(profiles.c.profile_name == profile_name)
         result = connection.execute(stmt).first()
-        return dict(result._mapping) if result else None
+        if result:
+            return dict(result._mapping)
+        return None
 
 def delete_profile(profile_name: str):
     with engine.connect() as connection:

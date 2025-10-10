@@ -11,33 +11,64 @@ from textual.events import Key
 from textual.screen import Screen
 from textual.timer import Timer
 from textual.widgets import (
-    DataTable,
-    Footer,
-    Header,
-    Input,
-    LoadingIndicator,
-    Markdown,
-    Static,
+    DataTable, Footer, Header, Input, LoadingIndicator, Markdown, Static
 )
 
 from hhcli.database import (
-    get_active_profile_name,
-    get_all_profiles,
-    get_full_negotiation_history_for_profile,
-    load_profile_config,
-    log_to_db,
-    record_apply_action,
-    save_vacancy_to_cache,
-    set_active_profile,
-    get_vacancy_from_cache,
+    get_active_profile_name, get_all_profiles, get_full_negotiation_history_for_profile,
+    load_profile_config, log_to_db, record_apply_action, save_vacancy_to_cache,
+    set_active_profile, get_vacancy_from_cache
 )
-
 
 def _normalize(text: Optional[str]) -> str:
     if not text:
         return ""
     return " ".join(str(text).lower().split())
 
+
+DELIVERED_MARKERS = ("отклик", "доставл", "прочитан", "applied")
+FAILED_MARKERS = ("failed",)
+
+
+def _is_delivered(status: Optional[str]) -> bool:
+    s = _normalize(status)
+    return any(m in s for m in DELIVERED_MARKERS)
+
+
+def _is_failed(status: Optional[str]) -> bool:
+    s = _normalize(status)
+    return any(m in s for m in FAILED_MARKERS)
+
+
+def _collect_delivered(history: list[dict]) -> tuple[set[str], set[str]]:
+    """
+    Возвращает:
+      delivered_ids  — id вакансий, куда отклик действительно ушёл (и последний статус не failed)
+      delivered_keys — ключи "title|employer" только для delivered_ids (для опционального матчинга по имени)
+    """
+    by_id: dict[str, list[dict]] = {}
+    for h in history:
+        vid = str(h.get("vacancy_id") or "")
+        if not vid:
+            continue
+        by_id.setdefault(vid, []).append(h)
+
+    delivered_ids: set[str] = set()
+    for vid, items in by_id.items():
+        items.sort(key=lambda x: str(x.get("applied_at") or ""))
+        last_status = items[-1].get("status")
+        if any(_is_delivered(it.get("status")) for it in items) and not _is_failed(last_status):
+            delivered_ids.add(vid)
+
+    delivered_keys: set[str] = set()
+    for h in history:
+        vid = str(h.get("vacancy_id") or "")
+        if vid in delivered_ids:
+            k = f"{_normalize(h.get('vacancy_title'))}|{_normalize(h.get('employer_name'))}"
+            if k.strip("|"):
+                delivered_keys.add(k)
+
+    return delivered_ids, delivered_keys
 
 class ApplyConfirmationScreen(Screen):
     """Экран подтверждения отправки откликов."""
@@ -75,11 +106,10 @@ class VacancyListScreen(Screen):
     """Список вакансий + детали справа."""
 
     BINDINGS = [
-        Binding("x", "toggle_select", "Выбрать", show=True),   # видно в футере
+        Binding("x", "toggle_select", "Выбрать", show=True),
         Binding("a", "apply_for_selected", "Откликнуться"),
         Binding("escape", "app.pop_screen", "Назад"),
     ]
-
     _debounce_timer: Optional[Timer] = None
 
     def __init__(self, vacancies: list[dict], resume_id: str) -> None:
@@ -89,7 +119,7 @@ class VacancyListScreen(Screen):
         self.selected_vacancies: set[str] = set()
         self.vacancies_by_id = {v["id"]: v for v in vacancies}
         self.index_to_id: list[str] = []
-        self._pending_details_id: Optional[str] = None  # для отмены устаревших ответов
+        self._pending_details_id: Optional[str] = None
 
         self.html_converter = html2text.HTML2Text()
         self.html_converter.body_width = 0
@@ -123,11 +153,7 @@ class VacancyListScreen(Screen):
         config = load_profile_config(profile_name)
         history = get_full_negotiation_history_for_profile(profile_name)
 
-        applied_ids = {h["vacancy_id"] for h in history}
-        applied_keys = {
-            f"{_normalize(h['vacancy_title'])}|{_normalize(h['employer_name'])}"
-            for h in history
-        }
+        delivered_ids, delivered_keys = _collect_delivered(history)
 
         for i, vac in enumerate(self.vacancies):
             salary = vac.get("salary")
@@ -144,22 +170,19 @@ class VacancyListScreen(Screen):
 
             vac_name = vac["name"]
             strike = False
-            if config.get("strikethrough_applied_vac") and vac["id"] in applied_ids:
+
+            if config.get("strikethrough_applied_vac") and vac["id"] in delivered_ids:
                 strike = True
+
             if not strike and config.get("strikethrough_applied_vac_name"):
                 key = f"{_normalize(vac['name'])}|{_normalize(vac['employer']['name'])}"
-                if key in applied_keys:
+                if key in delivered_keys:
                     strike = True
+
             if strike:
                 vac_name = f"[s]{vac_name}[/s]"
 
-            table.add_row(
-                "[ ]",
-                str(i + 1),
-                vac_name,
-                vac["employer"]["name"],
-                salary_str,
-            )
+            table.add_row("[ ]", str(i + 1), vac_name, vac["employer"]["name"], salary_str)
             self.index_to_id.append(vac["id"])
 
         self.query_one(LoadingIndicator).display = False
@@ -171,16 +194,13 @@ class VacancyListScreen(Screen):
             return None
         return self.index_to_id[idx]
 
-    # ===== Лёгкая прокрутка: debounce 300 мс и защита от устаревших ответов ====
     def on_data_table_row_highlighted(self, _: DataTable.RowHighlighted) -> None:
         if self._debounce_timer:
             self._debounce_timer.stop()
         vacancy_id = self._current_vacancy_id()
         if not vacancy_id:
             return
-        self._debounce_timer = self.set_timer(
-            0.3, lambda vid=vacancy_id: self.load_vacancy_details(vid)
-        )
+        self._debounce_timer = self.set_timer(0.3, lambda vid=vacancy_id: self.load_vacancy_details(vid))
 
     def load_vacancy_details(self, vacancy_id: Optional[str]) -> None:
         if not vacancy_id:
@@ -199,12 +219,7 @@ class VacancyListScreen(Screen):
         log_to_db("INFO", "Cache", f"Нет в кэше, тянем из API: {vacancy_id}")
         self.query_one(LoadingIndicator).display = True
         self.query_one("#vacancy_details").update("Загрузка...")
-        self.run_worker(
-            self.fetch_vacancy_details(vacancy_id),
-            exclusive=True,
-            thread=True,
-            name="VacancyDetails",
-        )
+        self.run_worker(self.fetch_vacancy_details(vacancy_id), exclusive=True, thread=True)
 
     async def fetch_vacancy_details(self, vacancy_id: str) -> None:
         try:
@@ -214,24 +229,39 @@ class VacancyListScreen(Screen):
         except Exception as exc:  # noqa: BLE001
             log_to_db("ERROR", "VacancyListScreen", f"Ошибка деталей {vacancy_id}: {exc}")
             self.app.call_from_thread(
-                self.query_one("#vacancy_details").update,
-                f"Ошибка загрузки: {exc}",
+                self.query_one("#vacancy_details").update, f"Ошибка загрузки: {exc}"
             )
-
     def display_vacancy_details(self, details: dict, vacancy_id: str) -> None:
-        # Если за время загрузки пользователь ушёл на другую строку — игнорируем ответ
         if self._pending_details_id != vacancy_id:
             return
 
+        salary_line = ""
+        salary_data = details.get("salary")
+        if salary_data:
+            s_from = salary_data.get("from")
+            s_to = salary_data.get("to")
+            currency = (salary_data.get("currency") or "").upper()
+            gross_str = " (до вычета налогов)" if salary_data.get("gross") else ""
+            
+            parts = []
+            if s_from:
+                parts.append(f"от {s_from:,}".replace(",", " "))
+            if s_to:
+                parts.append(f"до {s_to:,}".replace(",", " "))
+            
+            if parts:
+                salary_str = " ".join(parts)
+                salary_line = f"**Зарплата:** {salary_str} {currency}{gross_str}\n"
+
         desc_html = details.get("description", "")
         desc_md = self.html_converter.handle(html.unescape(desc_html)).strip()
-
         skills = details.get("key_skills") or []
         skills_text = "* " + "\n* ".join(s["name"] for s in skills) if skills else "Не указаны"
 
         doc = (
             f"# {details['name']}\n\n"
-            f"**Компания:** {details['employer']['name']}\n"
+            f"{salary_line}\n"
+            f"**Компания:** {details['employer']['name']}\n\n"
             f"**Ссылка:** {details['alternate_url']}\n\n"
             f"**Ключевые навыки:**\n{skills_text}\n\n"
             f"**Описание:**\n\n{desc_md}\n"
@@ -240,7 +270,6 @@ class VacancyListScreen(Screen):
         self.query_one(LoadingIndicator).display = False
         self.query_one("#details_pane").scroll_home(animate=False)
 
-    # ===== Выбор вакансии: hotkey в футере + поддержка 'ч' =====
     def action_toggle_select(self) -> None:
         self._toggle_current_selection()
 
@@ -256,65 +285,48 @@ class VacancyListScreen(Screen):
         if not vacancy_id:
             return
         table = self.query_one(DataTable)
-        mark_cell = (table.cursor_row, 0)
+        coord = (table.cursor_row, 0)
         if vacancy_id in self.selected_vacancies:
             self.selected_vacancies.remove(vacancy_id)
-            table.update_cell_at(mark_cell, "[ ]")
+            table.update_cell_at(coord, "[ ]")
             log_to_db("INFO", "VacancyListScreen", f"Сняли выбор: {vacancy_id}")
         else:
             self.selected_vacancies.add(vacancy_id)
-            table.update_cell_at(mark_cell, "[green]x[/]")
+            table.update_cell_at(coord, "[green]x[/]")
             log_to_db("INFO", "VacancyListScreen", f"Выбрали: {vacancy_id}")
         table.refresh()
 
-    # ===== Массовый отклик =====
     def action_apply_for_selected(self) -> None:
         if not self.selected_vacancies:
             self.app.notify("Нет выбранных вакансий.", title="Внимание", severity="warning")
             return
-        self.app.push_screen(
-            ApplyConfirmationScreen(len(self.selected_vacancies)),
-            self.on_apply_confirmed,
-        )
+        self.app.push_screen(ApplyConfirmationScreen(len(self.selected_vacancies)), self.on_apply_confirmed)
 
     def on_apply_confirmed(self, ok: bool) -> None:
         if not ok:
             return
-        self.app.notify(
-            f"Отправка {len(self.selected_vacancies)} откликов...",
-            title="В процессе",
-            timeout=5,
-        )
+        self.app.notify(f"Отправка {len(self.selected_vacancies)} откликов...", title="В процессе", timeout=2)
         self.run_worker(self.run_apply_worker(), thread=True)
 
     async def run_apply_worker(self) -> None:
         profile_name = self.app.client.profile_name
-        config = load_profile_config(profile_name)
-        cover_letter = config.get("cover_letter", "")
+        cover_letter = load_profile_config(profile_name).get("cover_letter", "")
         table = self.query_one(DataTable)
 
         for vacancy_id in list(self.selected_vacancies):
             v = self.vacancies_by_id.get(vacancy_id, {})
             ok, reason = self.app.client.apply_to_vacancy(
-                resume_id=self.resume_id,
-                vacancy_id=vacancy_id,
-                message=cover_letter,
+                resume_id=self.resume_id, vacancy_id=vacancy_id, message=cover_letter
             )
             vac_title = v.get("name", vacancy_id)
             emp = (v.get("employer") or {}).get("name")
-
             if ok:
-                self.app.call_from_thread(
-                    self.app.notify, f"[OK] {vac_title}", title="Отклик отправлен"
-                )
+                self.app.call_from_thread(self.app.notify, f"[OK] {vac_title}", title="Отклик отправлен")
                 record_apply_action(vacancy_id, profile_name, vac_title, emp, "applied", None)
             else:
                 self.app.call_from_thread(
-                    self.app.notify,
-                    f"[Ошибка: {reason}] {vac_title}",
-                    title="Отклик не удался",
-                    severity="error",
-                    timeout=8,
+                    self.app.notify, f"[Ошибка: {reason}] {vac_title}",
+                    title="Отклик не удался", severity="error", timeout=2
                 )
                 record_apply_action(vacancy_id, profile_name, vac_title, emp, "failed", reason)
 
@@ -326,7 +338,7 @@ class VacancyListScreen(Screen):
 
 
 class ResumeSelectionScreen(Screen):
-    """Выбор одного из резюме пользователя."""
+    """Выбор резюме."""
 
     def __init__(self, resume_data: dict) -> None:
         super().__init__()
@@ -350,11 +362,7 @@ class ResumeSelectionScreen(Screen):
             return
 
         for r in items:
-            table.add_row(
-                r.get("id"),
-                f"[bold green]{r.get('title')}[/bold green]",
-                r.get("alternate_url"),
-            )
+            table.add_row(r.get("id"), f"[bold green]{r.get('title')}[/bold green]", r.get("alternate_url"))
             self.index_to_resume_id.append(r.get("id"))
 
     def on_data_table_row_selected(self, _: DataTable.RowSelected) -> None:
@@ -368,11 +376,8 @@ class ResumeSelectionScreen(Screen):
             if r.get("id") == resume_id:
                 resume_title = r.get("title") or ""
                 break
-
         log_to_db("INFO", "ResumeScreen", f"Выбрано резюме: {resume_id} '{resume_title}'")
-        self.app.push_screen(
-            SearchModeScreen(resume_id=resume_id, resume_title=resume_title, is_root_screen=False)
-        )
+        self.app.push_screen(SearchModeScreen(resume_id=resume_id, resume_title=resume_title, is_root_screen=False))
 
 
 class SearchModeScreen(Screen):
@@ -406,8 +411,7 @@ class SearchModeScreen(Screen):
 
     async def action_run_search(self, mode: str) -> None:
         log_to_db("INFO", "SearchModeScreen", f"Выбран режим '{mode}'")
-        self.app.notify("Идёт поиск вакансий...", title="Загрузка", timeout=10)
-
+        self.app.notify("Идёт поиск вакансий...", title="Загрузка", timeout=2)
         try:
             if mode == "auto":
                 result = self.app.client.get_similar_vacancies(self.resume_id)
@@ -416,7 +420,7 @@ class SearchModeScreen(Screen):
                 result = self.app.client.search_vacancies(cfg)
         except Exception as exc:  # noqa: BLE001
             log_to_db("ERROR", "SearchModeScreen", f"Ошибка API: {exc}")
-            self.app.notify(f"Ошибка API: {exc}", title="Ошибка", severity="error", timeout=10)
+            self.app.notify(f"Ошибка API: {exc}", title="Ошибка", severity="error", timeout=2)
             return
 
         items = (result or {}).get("items") or []
@@ -425,11 +429,7 @@ class SearchModeScreen(Screen):
             self.app.push_screen(VacancyListScreen(vacancies=items, resume_id=self.resume_id))
         else:
             log_to_db("WARN", "SearchModeScreen", "Пустой результат")
-            self.app.notify(
-                "По вашему запросу ничего не найдено.",
-                title="Результат поиска",
-                severity="warning",
-            )
+            self.app.notify("По вашему запросу ничего не найдено.", title="Результат поиска", severity="warning")
 
 
 class ProfileSelectionScreen(Screen):
@@ -473,13 +473,6 @@ class HHCliApp(App):
     #details_pane { padding: 0 1; }
     """
 
-    SCREENS = {
-        "profile_select": ProfileSelectionScreen,
-        "resume_select": ResumeSelectionScreen,
-        "search_mode": SearchModeScreen,
-        "vacancy_list": VacancyListScreen,
-    }
-
     BINDINGS = [
         Binding("q", "quit", "Выход", show=True, priority=True),
         Binding("й", "quit", "Выход (RU)", show=False, priority=True),
@@ -495,20 +488,23 @@ class HHCliApp(App):
 
         if not all_profiles:
             self.exit(
-                result=(
-                    "В базе не найдено ни одного профиля. "
-                    "Пожалуйста, войдите в аккаунт через --auth <имя_профиля>."
-                )
+                "В базе не найдено ни одного профиля. "
+                "Войдите через --auth <имя_профиля>."
             )
             return
 
-        active_profile = get_active_profile_name()
-        if not active_profile:
-            log_to_db("INFO", "TUI", "Активный профиль не найден — показ выбора.")
-            self.push_screen(ProfileSelectionScreen(all_profiles), self.on_profile_selected)
-            return
-
-        await self.proceed_with_profile(active_profile)
+        # Если профиль только один, используем его без вопросов
+        if len(all_profiles) == 1:
+            profile_name = all_profiles[0]["profile_name"]
+            log_to_db("INFO", "TUI", f"Найден один профиль '{profile_name}', используется автоматически.")
+            set_active_profile(profile_name)
+            await self.proceed_with_profile(profile_name)
+        else:
+            # Если профилей несколько, ВСЕГДА показываем экран выбора
+            log_to_db("INFO", "TUI", "Найдено несколько профилей — показ выбора.")
+            self.push_screen(
+                ProfileSelectionScreen(all_profiles), self.on_profile_selected
+            )
 
     async def on_profile_selected(self, selected_profile: Optional[str]) -> None:
         if not selected_profile:
@@ -523,21 +519,16 @@ class HHCliApp(App):
             self.client.load_profile_data(profile_name)
             self.sub_title = f"Профиль: {profile_name}"
 
-            self.app.notify("Синхронизация истории откликов...", title="Синхронизация", timeout=20)
+            self.app.notify("Синхронизация истории откликов...", title="Синхронизация", timeout=2)
             self.run_worker(self.client.sync_negotiation_history, thread=True, name="SyncWorker")
 
             log_to_db("INFO", "TUI", f"Загрузка резюме для '{profile_name}'")
             resumes = self.client.get_my_resumes()
             items = (resumes or {}).get("items") or []
-
             if len(items) == 1:
                 r = items[0]
-                log_to_db("INFO", "TUI", "Одно резюме — сразу к поиску.")
-                self.push_screen(
-                    SearchModeScreen(resume_id=r["id"], resume_title=r["title"], is_root_screen=True)
-                )
+                self.push_screen(SearchModeScreen(resume_id=r["id"], resume_title=r["title"], is_root_screen=True))
             else:
-                log_to_db("INFO", "TUI", "Несколько резюме — экран выбора.")
                 self.push_screen(ResumeSelectionScreen(resume_data=resumes))
         except Exception as exc:  # noqa: BLE001
             log_to_db("ERROR", "TUI", f"Критическая ошибка профиля/резюме: {exc}")

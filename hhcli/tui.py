@@ -7,7 +7,9 @@ from textual.events import Key
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, LoadingIndicator, Static
 
-from hhcli.database import get_all_profiles, set_active_profile, load_profile_config, log_to_db
+from hhcli.database import (get_all_profiles, set_active_profile,
+                            load_profile_config, log_to_db,
+                            save_vacancy_to_cache, get_vacancy_from_cache)
 
 
 class VacancyListScreen(Screen):
@@ -20,14 +22,17 @@ class VacancyListScreen(Screen):
     def __init__(self, vacancies: list[dict]):
         super().__init__()
         self.vacancies = vacancies
-        self.vacancy_cache = {}
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True, name="hh-cli")
         with Horizontal():
-            yield DataTable(id="vacancy_table", cursor_type="row", zebra_stripes=True)
+            yield DataTable(
+                id="vacancy_table", cursor_type="row", zebra_stripes=True)
             with VerticalScroll(id="details_pane"):
-                yield Static("[dim]Выберите вакансию в списке слева для просмотра деталей.[/dim]", id="vacancy_details")
+                yield Static(
+                    "[dim]Выберите вакансию в списке слева "
+                    "для просмотра деталей.[/dim]",
+                    id="vacancy_details")
                 yield LoadingIndicator()
         yield Footer()
 
@@ -48,7 +53,8 @@ class VacancyListScreen(Screen):
                 s_from = salary.get('from')
                 s_to = salary.get('to')
                 if s_from and s_to:
-                    salary_str = f"{s_from:,} - {s_to:,} {currency}".replace(",", " ")
+                    salary_str = f"{s_from:,} - {s_to:,} {currency}".replace(
+                        ",", " ")
                 elif s_from:
                     salary_str = f"от {s_from:,} {currency}".replace(",", " ")
                 elif s_to:
@@ -63,29 +69,46 @@ class VacancyListScreen(Screen):
             )
         self.query_one(LoadingIndicator).display = False
 
-    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+    def on_data_table_row_highlighted(
+            self, event: DataTable.RowHighlighted) -> None:
         vacancy_id = event.row_key.value
         if vacancy_id:
-            log_to_db("INFO", "VacancyListScreen", f"Просмотр деталей для вакансии ID: {vacancy_id}.")
+            log_to_db(
+                "INFO", "VacancyListScreen",
+                f"Просмотр деталей для вакансии ID: {vacancy_id}.")
             self.update_vacancy_details(vacancy_id)
 
     def update_vacancy_details(self, vacancy_id: str) -> None:
-        if vacancy_id in self.vacancy_cache:
-            self.display_vacancy_details(self.vacancy_cache[vacancy_id])
+        cached_details = get_vacancy_from_cache(vacancy_id)
+        if cached_details:
+            log_to_db("INFO", "Cache", f"Вакансия {vacancy_id} найдена в кэше.")
+            self.display_vacancy_details(cached_details)
             return
 
+        log_to_db(
+            "INFO", "Cache",
+            f"Вакансия {vacancy_id} не в кэше, загрузка из API.")
         self.query_one(LoadingIndicator).display = True
         self.query_one("#vacancy_details").update("Загрузка...")
-        self.run_worker(self.fetch_vacancy_details(vacancy_id), exclusive=True, thread=True)
+        self.run_worker(
+            self.fetch_vacancy_details(vacancy_id),
+            exclusive=True,
+            thread=True
+        )
 
     async def fetch_vacancy_details(self, vacancy_id: str) -> None:
         try:
             details = self.app.client.get_vacancy_details(vacancy_id)
-            self.vacancy_cache[vacancy_id] = details
+            save_vacancy_to_cache(vacancy_id, details)
             self.app.call_from_thread(self.display_vacancy_details, details)
         except Exception as e:
-            log_to_db("ERROR", "VacancyListScreen", f"Ошибка загрузки деталей для вакансии {vacancy_id}: {e}")
-            self.app.call_from_thread(self.query_one("#vacancy_details").update, f"Ошибка загрузки: {e}")
+            log_to_db(
+                "ERROR", "VacancyListScreen",
+                f"Ошибка загрузки деталей для вакансии {vacancy_id}: {e}")
+            self.app.call_from_thread(
+                self.query_one("#vacancy_details").update,
+                f"Ошибка загрузки: {e}"
+            )
 
     def display_vacancy_details(self, details: dict) -> None:
         description_text = details.get('description', '')
@@ -109,7 +132,6 @@ class VacancyListScreen(Screen):
         self.query_one(LoadingIndicator).display = False
         self.query_one("#details_pane").scroll_home(animate=False)
 
-
 class SearchModeScreen(Screen):
     """Экран выбора режима поиска: автоматический или ручной."""
 
@@ -119,7 +141,8 @@ class SearchModeScreen(Screen):
         Binding("escape", "handle_escape", "Назад/Выход", show=True),
     ]
 
-    def __init__(self, resume_id: str, resume_title: str, is_root_screen: bool = False):
+    def __init__(self, resume_id: str, resume_title: str,
+                 is_root_screen: bool = False):
         super().__init__()
         self.resume_id = resume_id
         self.resume_title = resume_title
@@ -127,14 +150,15 @@ class SearchModeScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True, name="hh-cli")
-        yield Static(f"Выбрано резюме: [b cyan]{self.resume_title}[/b cyan]\n\n")
+        yield Static(
+            f"Выбрано резюме: [b cyan]{self.resume_title}[/b cyan]\n\n")
         yield Static("[b]Выберите способ поиска вакансий:[/b]")
         yield Static("  [yellow]1)[/] Автоматический (рекомендации hh.ru)")
         yield Static("  [yellow]2)[/] Ручной (поиск по ключевым словам)")
         yield Footer()
 
     def action_handle_escape(self) -> None:
-        """Обрабатывает нажатие Escape: выходит из приложения, если это корневой экран, иначе возвращается назад."""
+        """Обрабатывает нажатие Escape."""
         if self.is_root_screen:
             self.app.exit()
         else:
@@ -143,21 +167,36 @@ class SearchModeScreen(Screen):
     async def action_run_search(self, mode: str) -> None:
         """Запускает поиск вакансий в выбранном режиме."""
         log_to_db("INFO", "SearchModeScreen", f"Выбран '{mode}' режим поиска.")
-        self.app.notify("Идет поиск вакансий...", title="Загрузка", timeout=10)
+        self.app.notify(
+            "Идет поиск вакансий...", title="Загрузка", timeout=10)
+
+        result = None
         try:
             if mode == "auto":
                 result = self.app.client.get_similar_vacancies(self.resume_id)
-            else: # mode == "manual"
+            else:  # mode == "manual"
                 config = load_profile_config(self.app.client.profile_name)
                 result = self.app.client.search_vacancies(config)
 
-            vacancies = result.get("items", [])
-            log_to_db("INFO", "SearchModeScreen", f"Найдено {len(vacancies)} вакансий. Переход к списку.")
-            self.app.push_screen(VacancyListScreen(vacancies=vacancies))
         except Exception as e:
-            log_to_db("ERROR", "SearchModeScreen", f"Ошибка API при поиске вакансий: {e}")
-            self.app.notify(f"Ошибка API: {e}", title="Ошибка", severity="error")
+            log_to_db("ERROR", "SearchModeScreen",
+                      f"Ошибка API при поиске вакансий: {e}")
+            # Теперь мы показываем настоящую ошибку от API
+            self.app.notify(f"Ошибка API: {e}", title="Ошибка",
+                            severity="error", timeout=10)
+            return  # Прерываем выполнение
 
+        # Если мы дошли до сюда, значит API-запрос прошел без исключений
+        if result and result.get("items"):
+            vacancies = result.get("items", [])
+            log_to_db("INFO", "SearchModeScreen",
+                      f"Найдено {len(vacancies)} вакансий. Переход к списку.")
+            self.app.push_screen(VacancyListScreen(vacancies=vacancies))
+        else:
+            # Случай, когда API отработал, но ничего не нашел
+            log_to_db("WARN", "SearchModeScreen", "Поиск не дал результатов.")
+            self.app.notify("По вашему запросу ничего не найдено.",
+                            title="Результат поиска", severity="warning")
 
 class ResumeSelectionScreen(Screen):
     """Экран выбора одного из резюме пользователя."""
@@ -198,9 +237,7 @@ class ResumeSelectionScreen(Screen):
                 break
 
         log_to_db("INFO", "ResumeScreen", f"Выбрано резюме ID: {resume_id}, Название: '{resume_title}'.")
-        # is_root_screen=False, так как мы переходим с другого экрана
         self.app.push_screen(SearchModeScreen(resume_id=resume_id, resume_title=resume_title, is_root_screen=False))
-
 
 class ProfileSelectionScreen(Screen):
     """Экран выбора профиля, если их в базе несколько."""
@@ -232,10 +269,8 @@ class ProfileSelectionScreen(Screen):
         self.dismiss(profile_name)
 
     def on_key(self, event: Key) -> None:
-        # Предотвращаем закрытие экрана выбора профиля по Escape
         if event.key == "escape":
             event.prevent_default()
-
 
 class HHCliApp(App):
     """Основное TUI-приложение."""
@@ -306,7 +341,6 @@ class HHCliApp(App):
             if len(items) == 1:
                 resume = items[0]
                 log_to_db("INFO", "TUI", "Найдено одно резюме, переход к выбору режима поиска.")
-                # is_root_screen=True, так как это первый интерактивный экран
                 self.push_screen(SearchModeScreen(
                     resume_id=resume['id'], 
                     resume_title=resume['title'], 

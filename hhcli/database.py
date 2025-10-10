@@ -1,10 +1,12 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Any
+
 from platformdirs import user_data_dir
 from sqlalchemy import (create_engine, MetaData, Table, Column,
-                        Integer, String, DateTime, JSON, Text,
-                        insert, select, delete, update)
+                        Integer, String, DateTime, Text, Boolean,
+                        ForeignKey, insert, select, delete, update)
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -17,19 +19,33 @@ DB_PATH = os.path.join(DATA_DIR, DB_FILENAME)
 engine = None
 metadata = MetaData()
 
-def get_default_config():
+
+def get_default_config() -> dict[str, Any]:
     """Возвращает стандартную конфигурацию поиска для нового профиля."""
     return {
-        "text_include": "Python developer",
-        "negative": " старший | senior | ведущий | Middle | ETL | BI | ML | Data Scientist | CV | NLP | Unity | Unreal | C# | C\\+\\+ | Golang | PHP | DevOps | AQA | QA | тестировщик | аналитик | analyst | маркетолог | менеджер | руководитель | стажер | intern | junior | джуниор",
+        "text_include": '("Python developer" OR "Backend developer")',
+        "negative": [
+            "старший", "senior", "ведущий", "Middle", "ETL", "BI", "ML",
+            "Data Scientist", "CV", "NLP", "Unity", "Unreal", "C#", "C++",
+            "Golang", "PHP", "DevOps", "AQA", "QA", "тестировщик",
+            "аналитик", "analyst", "маркетолог", "менеджер",
+            "руководитель", "стажер", "intern", "junior", "джуниор"
+        ],
         "work_format": "REMOTE",
         "area_id": "113",
         "search_field": "name",
         "period": "3",
-        "role_ids_config": "96,104,107,112,113,114,116,121,124,125,126",
+        "role_ids_config": [
+            "96", "104", "107", "112", "113", "114", "116", "121", "124",
+            "125", "126"
+        ],
+        "cover_letter": "",
+        "skip_applied_in_same_company": False,
+        "deduplicate_by_name_and_company": True,
         "strikethrough_applied_vac": True,
         "strikethrough_applied_vac_name": True,
     }
+
 
 profiles = Table(
     "profiles", metadata,
@@ -39,7 +55,44 @@ profiles = Table(
     Column("access_token", String, nullable=False),
     Column("refresh_token", String, nullable=False),
     Column("expires_at", DateTime, nullable=False),
-    Column("config_json", JSON, default=get_default_config)
+)
+
+profile_configs = Table(
+    "profile_configs", metadata,
+    Column("profile_name", String,
+           ForeignKey('profiles.profile_name', ondelete='CASCADE'),
+           primary_key=True),
+    Column("text_include", Text),
+    Column("work_format", String),
+    Column("area_id", String),
+    Column("search_field", String),
+    Column("period", String),
+    Column("cover_letter", Text),
+    Column("skip_applied_in_same_company", Boolean, nullable=False,
+           default=False),
+    Column("deduplicate_by_name_and_company", Boolean, nullable=False,
+           default=True),
+    Column("strikethrough_applied_vac", Boolean, nullable=False, default=True),
+    Column("strikethrough_applied_vac_name", Boolean, nullable=False,
+           default=True),
+)
+
+config_negative_keywords = Table(
+    "config_negative_keywords", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("profile_name", String,
+           ForeignKey('profiles.profile_name', ondelete='CASCADE'),
+           nullable=False, index=True),
+    Column("keyword", String, nullable=False)
+)
+
+config_professional_roles = Table(
+    "config_professional_roles", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("profile_name", String,
+           ForeignKey('profiles.profile_name', ondelete='CASCADE'),
+           nullable=False, index=True),
+    Column("role_id", String, nullable=False)
 )
 
 app_state = Table(
@@ -71,16 +124,61 @@ negotiation_history = Table(
 vacancy_cache = Table(
     "vacancy_cache", metadata,
     Column("vacancy_id", String, primary_key=True),
-    Column("json_data", JSON, nullable=False),
+    Column("json_data", Text, nullable=False),
     Column("cached_at", DateTime, nullable=False)
 )
 
 dictionaries_cache = Table(
     "dictionaries_cache", metadata,
     Column("name", String, primary_key=True),
-    Column("json_data", JSON, nullable=False),
+    Column("json_data", Text, nullable=False),
     Column("cached_at", DateTime, nullable=False)
 )
+
+def save_vacancy_to_cache(vacancy_id: str, vacancy_data: dict):
+    """Сохраняет JSON-данные вакансии в кэш в виде текста."""
+    if not engine:
+        return
+
+    json_string = json.dumps(vacancy_data, ensure_ascii=False)
+
+    values = {
+        "vacancy_id": vacancy_id,
+        "json_data": json_string,
+        "cached_at": datetime.now()
+    }
+    stmt = sqlite_insert(vacancy_cache).values(values)
+    # Если запись уже есть, обновляем её (on conflict)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=['vacancy_id'],
+        set_={
+            "json_data": stmt.excluded.json_data,
+            "cached_at": stmt.excluded.cached_at
+        }
+    )
+    with engine.connect() as connection:
+        connection.execute(stmt)
+        connection.commit()
+
+def get_vacancy_from_cache(vacancy_id: str) -> dict | None:
+    """
+    Извлекает данные вакансии из кэша, если они не старше 7 дней.
+    Возвращает dict или None.
+    """
+    if not engine:
+        return None
+
+    seven_days_ago = datetime.now() - timedelta(days=7)
+    with engine.connect() as connection:
+        stmt = select(vacancy_cache.c.json_data).where(
+            vacancy_cache.c.vacancy_id == vacancy_id,
+            vacancy_cache.c.cached_at >= seven_days_ago
+        )
+        result = connection.execute(stmt).scalar_one_or_none()
+
+        if result:
+            return json.loads(result)
+        return None
 
 def init_db():
     global engine
@@ -89,25 +187,31 @@ def init_db():
     engine = create_engine(f"sqlite:///{DB_PATH}")
     metadata.create_all(engine)
 
+
 def log_to_db(level: str, source: str, message: str):
     if not engine:
         return
     with engine.connect() as connection:
-        stmt = insert(app_logs).values(level=level, source=source, message=message)
+        stmt = insert(app_logs).values(
+            level=level, source=source, message=message)
         connection.execute(stmt)
         connection.commit()
 
-def record_apply_action(vacancy_id: str, profile_name: str, vacancy_title: str, employer_name: str, status: str, reason: str | None):
+def record_apply_action(
+        vacancy_id: str, profile_name: str, vacancy_title: str,
+        employer_name: str, status: str, reason: str | None):
     values = {
         "vacancy_id": vacancy_id, "profile_name": profile_name,
         "vacancy_title": vacancy_title, "employer_name": employer_name,
         "status": status, "reason": reason, "applied_at": datetime.now(),
     }
     stmt = sqlite_insert(negotiation_history).values(**values)
-    stmt = stmt.on_conflict_do_update(index_elements=['vacancy_id'], set_=values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=['vacancy_id'], set_=values)
     with engine.connect() as connection:
         connection.execute(stmt)
         connection.commit()
+
 
 def get_full_negotiation_history_for_profile(profile_name: str) -> list[dict]:
     with engine.connect() as connection:
@@ -116,6 +220,7 @@ def get_full_negotiation_history_for_profile(profile_name: str) -> list[dict]:
         ).order_by(negotiation_history.c.applied_at.desc())
         result = connection.execute(stmt).fetchall()
         return [dict(row._mapping) for row in result]
+
 
 def get_last_sync_timestamp(profile_name: str) -> datetime | None:
     with engine.connect() as connection:
@@ -126,14 +231,17 @@ def get_last_sync_timestamp(profile_name: str) -> datetime | None:
             return datetime.fromisoformat(result)
         return None
 
+
 def set_last_sync_timestamp(profile_name: str, timestamp: datetime):
     with engine.connect() as connection:
         key = f"last_negotiation_sync_{profile_name}"
         value = timestamp.isoformat()
         stmt = sqlite_insert(app_state).values(key=key, value=value)
-        stmt = stmt.on_conflict_do_update(index_elements=['key'], set_=dict(value=value))
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['key'], set_=dict(value=value))
         connection.execute(stmt)
         connection.commit()
+
 
 def upsert_negotiation_history(negotiations: list[dict], profile_name: str):
     if not negotiations:
@@ -150,33 +258,59 @@ def upsert_negotiation_history(negotiations: list[dict], profile_name: str):
                 "employer_name": vacancy.get('employer', {}).get('name'),
                 "status": item.get('state', {}).get('name', 'N/A'),
                 "reason": None,
-                "applied_at": datetime.fromisoformat(item['updated_at'].replace("Z", "+00:00")),
+                "applied_at": datetime.fromisoformat(
+                    item['updated_at'].replace("Z", "+00:00")),
             }
             stmt = sqlite_insert(negotiation_history).values(**values)
             stmt = stmt.on_conflict_do_update(
                 index_elements=['vacancy_id'],
-                set_={"status": values["status"], "applied_at": values["applied_at"]}
+                set_={
+                    "status": values["status"],
+                    "applied_at": values["applied_at"]
+                }
             )
             connection.execute(stmt)
         connection.commit()
 
-def save_or_update_profile(profile_name: str, user_info: dict, token_data: dict, expires_at: datetime):
-    with engine.connect() as connection:
+
+def save_or_update_profile(
+        profile_name: str, user_info: dict,
+        token_data: dict, expires_at: datetime):
+    with engine.connect() as connection, connection.begin():
         stmt = select(profiles).where(profiles.c.hh_user_id == user_info['id'])
         existing = connection.execute(stmt).first()
-        values = {
+
+        profile_values = {
             "hh_user_id": user_info['id'], "email": user_info.get('email', ''),
-            "access_token": token_data["access_token"], "refresh_token": token_data["refresh_token"],
+            "access_token": token_data["access_token"],
+            "refresh_token": token_data["refresh_token"],
             "expires_at": expires_at
         }
+
         if existing:
-            stmt_update = update(profiles).where(profiles.c.hh_user_id == user_info['id']).values(profile_name=profile_name, **values)
-            connection.execute(stmt_update)
+            connection.execute(update(profiles).where(
+                profiles.c.hh_user_id == user_info['id']
+            ).values(profile_name=profile_name, **profile_values))
         else:
-            values["config_json"] = get_default_config()
-            stmt_insert = insert(profiles).values(profile_name=profile_name, **values)
-            connection.execute(stmt_insert)
-        connection.commit()
+            connection.execute(insert(profiles).values(
+                profile_name=profile_name, **profile_values))
+
+            defaults = get_default_config()
+            config_main = {k: v for k, v in defaults.items() if k not in
+                           ["negative", "role_ids_config"]}
+            config_main["profile_name"] = profile_name
+            connection.execute(insert(profile_configs).values(config_main))
+
+            keywords = [{"profile_name": profile_name, "keyword": kw}
+                        for kw in defaults["negative"]]
+            if keywords:
+                connection.execute(insert(config_negative_keywords), keywords)
+
+            roles = [{"profile_name": profile_name, "role_id": r_id}
+                     for r_id in defaults["role_ids_config"]]
+            if roles:
+                connection.execute(insert(config_professional_roles), roles)
+
 
 def load_profile(profile_name: str) -> dict | None:
     with engine.connect() as connection:
@@ -192,37 +326,73 @@ def delete_profile(profile_name: str):
         connection.execute(stmt)
         connection.commit()
 
+
 def get_all_profiles() -> list[dict]:
     with engine.connect() as connection:
         stmt = select(profiles)
         result = connection.execute(stmt).fetchall()
         return [dict(row._mapping) for row in result]
 
+
 def set_active_profile(profile_name: str):
     with engine.connect() as connection:
-        stmt = sqlite_insert(app_state).values(key="active_profile", value=profile_name)
-        stmt = stmt.on_conflict_do_update(index_elements=['key'], set_=dict(value=profile_name))
+        stmt = sqlite_insert(app_state).values(
+            key="active_profile", value=profile_name)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['key'], set_=dict(value=profile_name))
         connection.execute(stmt)
         connection.commit()
+
 
 def get_active_profile_name() -> str | None:
     with engine.connect() as connection:
-        stmt = select(app_state.c.value).where(app_state.c.key == "active_profile")
+        stmt = select(app_state.c.value).where(
+            app_state.c.key == "active_profile")
         return connection.execute(stmt).scalar_one_or_none()
 
+
 def load_profile_config(profile_name: str) -> dict:
+    """Загружает полную конфигурацию из всех связанных таблиц."""
     with engine.connect() as connection:
-        stmt = select(profiles.c.config_json).where(profiles.c.profile_name == profile_name)
-        result = connection.execute(stmt).scalar_one_or_none()
-        if result:
-            config = result if isinstance(result, dict) else json.loads(result)
-            default_config = get_default_config()
-            default_config.update(config)
-            return default_config
-        return get_default_config()
+        stmt_main = select(profile_configs).where(
+            profile_configs.c.profile_name == profile_name)
+        result = connection.execute(stmt_main).first()
+        if not result:
+            return get_default_config()
+
+        config = dict(result._mapping)
+
+        stmt_keywords = select(config_negative_keywords.c.keyword).where(
+            config_negative_keywords.c.profile_name == profile_name)
+        config["negative"] = connection.execute(stmt_keywords).scalars().all()
+
+        stmt_roles = select(config_professional_roles.c.role_id).where(
+            config_professional_roles.c.profile_name == profile_name)
+        config["role_ids_config"] = connection.execute(stmt_roles).scalars().all()
+
+        return config
+
 
 def save_profile_config(profile_name: str, config: dict):
-    with engine.connect() as connection:
-        stmt = update(profiles).where(profiles.c.profile_name == profile_name).values(config_json=config)
-        connection.execute(stmt)
-        connection.commit()
+    """Сохраняет полную конфигурацию в связанные таблицы."""
+    with engine.connect() as connection, connection.begin():
+        negative_keywords = config.pop("negative", [])
+        role_ids = config.pop("role_ids_config", [])
+        
+        connection.execute(update(profile_configs).where(
+            profile_configs.c.profile_name == profile_name
+        ).values(**config))
+
+        connection.execute(delete(config_negative_keywords).where(
+            config_negative_keywords.c.profile_name == profile_name))
+        if negative_keywords:
+            connection.execute(insert(config_negative_keywords),
+                               [{"profile_name": profile_name, "keyword": kw}
+                                for kw in negative_keywords])
+
+        connection.execute(delete(config_professional_roles).where(
+            config_professional_roles.c.profile_name == profile_name))
+        if role_ids:
+            connection.execute(insert(config_professional_roles),
+                               [{"profile_name": profile_name, "role_id": r_id}
+                                for r_id in role_ids])

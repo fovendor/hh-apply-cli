@@ -137,11 +137,27 @@ class HHApiClient:
         return self._request("GET", f"/resumes/{resume_id}/similar_vacancies", params=params)
 
     def search_vacancies(self, config: dict, page: int = 0, per_page: int = 50):
-        params = {"text": f"{config['text_include']} NOT ({config['negative']})", "area": config['area_id'],
-                  "professional_role": config['role_ids_config'].split(','), "search_field": config['search_field'],
-                  "period": config['period'], "order_by": "publication_time", "page": page, "per_page": per_page}
+        negative_str = " OR ".join(config.get('negative', []))
+        text_query = config['text_include']
+        if negative_str:
+            text_query += f" NOT ({negative_str})"
+
+        params = {
+            "text": text_query,
+            "area": config['area_id'],
+            "professional_role": config.get('role_ids_config', []),
+            "search_field": config['search_field'],
+            "period": config['period'],
+            "order_by": "publication_time",
+            "page": page,
+            "per_page": per_page
+        }
+        
         if config.get('work_format') and config['work_format'] != "ANY":
-            params['schedule'] = config['work_format'].lower()
+            params['work_format'] = config['work_format']
+
+        params = {k: v for k, v in params.items() if v}
+
         return self._request("GET", "/vacancies", params=params)
 
     def get_vacancy_details(self, vacancy_id: str):
@@ -177,8 +193,14 @@ class HHApiClient:
         set_last_sync_timestamp(self.profile_name, datetime.now())
         log_to_db("INFO", "SyncEngine", "Синхронизация успешно завершена.")
 
-    def apply_to_vacancy(self, resume_id: str, vacancy_id: str, message: str = "") -> tuple[bool, str]:
-        payload = {"resume_id": resume_id, "vacancy_id": vacancy_id, "message": message}
+    def apply_to_vacancy(
+            self, resume_id: str, vacancy_id: str,
+            message: str = "") -> tuple[bool, str]:
+        payload = {
+            "resume_id": resume_id,
+            "vacancy_id": vacancy_id,
+            "message": message
+        }
         try:
             self._request("POST", "/negotiations", json=payload)
             log_to_db("INFO", "APIClient", f"Успешный отклик на вакансию {vacancy_id} с резюме {resume_id}.")

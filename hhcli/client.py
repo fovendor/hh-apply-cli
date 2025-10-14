@@ -137,31 +137,50 @@ class HHApiClient:
         return self._request("GET", f"/resumes/{resume_id}/similar_vacancies", params=params)
 
     def search_vacancies(self, config: dict, page: int = 0, per_page: int = 50):
-        negative_str = " OR ".join(config.get('negative', []))
-        text_query = config['text_include']
-        if negative_str:
-            text_query += f" NOT ({negative_str})"
+            """
+            Выполняет поиск вакансий по параметрам из конфигурации профиля.
+            """
+            positive_keywords = config.get('text_include', [])
+            positive_str = " OR ".join(f'"{kw}"' for kw in positive_keywords)
 
-        params = {
-            "text": text_query,
-            "area": config['area_id'],
-            "professional_role": config.get('role_ids_config', []),
-            "search_field": config['search_field'],
-            "period": config['period'],
-            "order_by": "publication_time",
-            "page": page,
-            "per_page": per_page
-        }
-        
-        if config.get('work_format') and config['work_format'] != "ANY":
-            params['work_format'] = config['work_format']
+            negative_keywords = config.get('negative', [])
+            negative_str = " OR ".join(f'"{kw}"' for kw in negative_keywords)
 
-        params = {k: v for k, v in params.items() if v}
+            text_query = ""
+            if positive_str:
+                text_query = f"({positive_str})"
+            
+            if negative_str:
+                if text_query:
+                    text_query += f" NOT ({negative_str})"
+                else:
+                    text_query = f"NOT ({negative_str})"
 
-        return self._request("GET", "/vacancies", params=params)
+            params = {
+                "text": text_query,
+                "area": config.get('area_id'),
+                "professional_role": config.get('role_ids_config', []),
+                "search_field": config.get('search_field'),
+                "period": config.get('period'),
+                "order_by": "publication_time",
+                "page": page,
+                "per_page": per_page
+            }
+            
+            if config.get('work_format') and config['work_format'] != "ANY":
+                params['work_format'] = config['work_format']
+
+            params = {k: v for k, v in params.items() if v}
+
+            return self._request("GET", "/vacancies", params=params)
 
     def get_vacancy_details(self, vacancy_id: str):
         return self._request("GET", f"/vacancies/{vacancy_id}")
+    
+    def get_dictionaries(self):
+        """Загружает общие справочники hh.ru."""
+        log_to_db("INFO", "APIClient", "Запрос общих справочников...")
+        return self._request("GET", "/dictionaries")
 
     def sync_negotiation_history(self):
         log_to_db("INFO", "SyncEngine", f"Запуск синхронизации истории откликов для профиля '{self.profile_name}'.")

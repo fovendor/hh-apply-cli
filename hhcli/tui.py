@@ -1,4 +1,3 @@
-# hhcli/tui.py
 import html
 import random
 from typing import Optional
@@ -17,8 +16,11 @@ from textual.widgets import (
 from hhcli.database import (
     get_active_profile_name, get_all_profiles, get_full_negotiation_history_for_profile,
     load_profile_config, log_to_db, record_apply_action, save_vacancy_to_cache,
-    set_active_profile, get_vacancy_from_cache
+    set_active_profile, get_vacancy_from_cache, get_dictionary_from_cache,
+    save_dictionary_to_cache
 )
+
+from hhcli.config_screen import ConfigScreen
 
 def _normalize(text: Optional[str]) -> str:
     if not text:
@@ -386,6 +388,8 @@ class SearchModeScreen(Screen):
     BINDINGS = [
         Binding("1", "run_search('auto')", "Авто", show=False),
         Binding("2", "run_search('manual')", "Ручной", show=False),
+        Binding("c", "edit_config", "Настройки", show=True),
+        Binding("с", "edit_config", "Настройки (RU)", show=False),
         Binding("escape", "handle_escape", "Назад/Выход", show=True),
     ]
 
@@ -408,6 +412,10 @@ class SearchModeScreen(Screen):
             self.app.exit()
         else:
             self.app.pop_screen()
+            
+    def action_edit_config(self) -> None:
+        """Открыть экран редактирования конфигурации."""
+        self.app.push_screen(ConfigScreen())
 
     async def action_run_search(self, mode: str) -> None:
         log_to_db("INFO", "SearchModeScreen", f"Выбран режим '{mode}'")
@@ -471,6 +479,25 @@ class HHCliApp(App):
     CSS = """
     #vacancy_table { width: 105; min-width: 45; }
     #details_pane { padding: 0 1; }
+    #config-form { padding: 0 2; }
+    #config-form > .header {
+        background: $primary;
+        color: $text;
+        padding: 1;
+        margin-top: 1;
+        text-align: center;
+    }
+    .switch-container {
+        align: left middle;
+        height: auto;
+    }
+    .switch-container > Switch {
+        width: auto;
+        margin-right: 2;
+    }
+    #cover_letter {
+        height: 15;
+    }
     """
 
     BINDINGS = [
@@ -481,6 +508,7 @@ class HHCliApp(App):
     def __init__(self, client) -> None:
         super().__init__()
         self.client = client
+        self.dictionaries = {}
 
     async def on_mount(self) -> None:
         log_to_db("INFO", "TUI", "Приложение смонтировано")
@@ -493,14 +521,12 @@ class HHCliApp(App):
             )
             return
 
-        # Если профиль только один, используем его без вопросов
         if len(all_profiles) == 1:
             profile_name = all_profiles[0]["profile_name"]
             log_to_db("INFO", "TUI", f"Найден один профиль '{profile_name}', используется автоматически.")
             set_active_profile(profile_name)
             await self.proceed_with_profile(profile_name)
         else:
-            # Если профилей несколько, ВСЕГДА показываем экран выбора
             log_to_db("INFO", "TUI", "Найдено несколько профилей — показ выбора.")
             self.push_screen(
                 ProfileSelectionScreen(all_profiles), self.on_profile_selected
@@ -518,6 +544,8 @@ class HHCliApp(App):
         try:
             self.client.load_profile_data(profile_name)
             self.sub_title = f"Профиль: {profile_name}"
+            
+            self.run_worker(self.cache_dictionaries, thread=True, name="DictCacheWorker")
 
             self.app.notify("Синхронизация истории откликов...", title="Синхронизация", timeout=2)
             self.run_worker(self.client.sync_negotiation_history, thread=True, name="SyncWorker")
@@ -534,6 +562,24 @@ class HHCliApp(App):
             log_to_db("ERROR", "TUI", f"Критическая ошибка профиля/резюме: {exc}")
             self.exit(result=exc)
 
+    async def cache_dictionaries(self) -> None:
+        """Проверяет кэш справочников и обновляет его при необходимости."""
+        cached_dicts = get_dictionary_from_cache("main_dictionaries")
+        if cached_dicts:
+            log_to_db("INFO", "TUI", "Справочники загружены из кэша.")
+            self.dictionaries = cached_dicts
+        else:
+            log_to_db("INFO", "TUI", "Кэш справочников пуст/устарел. Запрос к API...")
+            try:
+                live_dicts = self.client.get_dictionaries()
+                save_dictionary_to_cache("main_dictionaries", live_dicts)
+                self.dictionaries = live_dicts
+                log_to_db("INFO", "TUI", "Справочники успешно закэшированы.")
+            except Exception as e:
+                log_to_db("ERROR", "TUI", f"Не удалось загрузить справочники: {e}")
+                self.app.notify("Ошибка загрузки справочников!", severity="error")
+
     def action_quit(self) -> None:
         log_to_db("INFO", "TUI", "Пользователь запросил выход.")
         self.exit()
+

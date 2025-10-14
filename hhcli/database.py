@@ -22,14 +22,25 @@ metadata = MetaData()
 
 def get_default_config() -> dict[str, Any]:
     """Возвращает стандартную конфигурацию поиска для нового профиля."""
+    
+    default_cover_letter = """Здравствуйте!
+
+Описание вашей вакансии показалось мне интересным, хотелось бы подробнее узнать о требованиях к кандидату и о предстоящих задачах.
+
+Коротко о себе:
+...
+
+Буду рад обсудить, как мой опыт может быть для вас полезен.
+
+С уважением,
+Имя Фамилия
++7 (000) 000-00-00 | Tg: @nickname | e-mail@gmail.com"""
+    
     return {
-        "text_include": '("Python developer" OR "Backend developer")',
+        "text_include": ["Python developer", "Backend developer"],
         "negative": [
             "старший", "senior", "ведущий", "Middle", "ETL", "BI", "ML",
-            "Data Scientist", "CV", "NLP", "Unity", "Unreal", "C#", "C++",
-            "Golang", "PHP", "DevOps", "AQA", "QA", "тестировщик",
-            "аналитик", "analyst", "маркетолог", "менеджер",
-            "руководитель", "стажер", "intern", "junior", "джуниор"
+            "Data Scientist", "CV", "NLP", "Unity", "Unreal", "C#", "C++"
         ],
         "work_format": "REMOTE",
         "area_id": "113",
@@ -39,7 +50,7 @@ def get_default_config() -> dict[str, Any]:
             "96", "104", "107", "112", "113", "114", "116", "121", "124",
             "125", "126"
         ],
-        "cover_letter": "",
+        "cover_letter": default_cover_letter,
         "skip_applied_in_same_company": False,
         "deduplicate_by_name_and_company": True,
         "strikethrough_applied_vac": True,
@@ -62,7 +73,6 @@ profile_configs = Table(
     Column("profile_name", String,
            ForeignKey('profiles.profile_name', ondelete='CASCADE'),
            primary_key=True),
-    Column("text_include", Text),
     Column("work_format", String),
     Column("area_id", String),
     Column("search_field", String),
@@ -79,6 +89,15 @@ profile_configs = Table(
 
 config_negative_keywords = Table(
     "config_negative_keywords", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("profile_name", String,
+           ForeignKey('profiles.profile_name', ondelete='CASCADE'),
+           nullable=False, index=True),
+    Column("keyword", String, nullable=False)
+)
+
+config_positive_keywords = Table(
+    "config_positive_keywords", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("profile_name", String,
            ForeignKey('profiles.profile_name', ondelete='CASCADE'),
@@ -148,7 +167,6 @@ def save_vacancy_to_cache(vacancy_id: str, vacancy_data: dict):
         "cached_at": datetime.now()
     }
     stmt = sqlite_insert(vacancy_cache).values(values)
-    # Если запись уже есть, обновляем её (on conflict)
     stmt = stmt.on_conflict_do_update(
         index_elements=['vacancy_id'],
         set_={
@@ -159,6 +177,45 @@ def save_vacancy_to_cache(vacancy_id: str, vacancy_data: dict):
     with engine.connect() as connection:
         connection.execute(stmt)
         connection.commit()
+
+def save_dictionary_to_cache(name: str, data: dict):
+    """Сохраняет справочник в кэш."""
+    if not engine:
+        return
+
+    json_string = json.dumps(data, ensure_ascii=False)
+    values = {
+        "name": name,
+        "json_data": json_string,
+        "cached_at": datetime.now()
+    }
+    stmt = sqlite_insert(dictionaries_cache).values(values)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=['name'],
+        set_={
+            "json_data": stmt.excluded.json_data,
+            "cached_at": stmt.excluded.cached_at
+        }
+    )
+    with engine.connect() as connection:
+        connection.execute(stmt)
+        connection.commit()
+
+def get_dictionary_from_cache(name: str, max_age_days: int = 7) -> dict | None:
+    """Извлекает справочник из кэша, если он не устарел."""
+    if not engine:
+        return None
+
+    age_limit = datetime.now() - timedelta(days=max_age_days)
+    with engine.connect() as connection:
+        stmt = select(dictionaries_cache.c.json_data).where(
+            dictionaries_cache.c.name == name,
+            dictionaries_cache.c.cached_at >= age_limit
+        )
+        result = connection.execute(stmt).scalar_one_or_none()
+        if result:
+            return json.loads(result)
+        return None
 
 def get_vacancy_from_cache(vacancy_id: str) -> dict | None:
     """
@@ -272,10 +329,13 @@ def upsert_negotiation_history(negotiations: list[dict], profile_name: str):
             connection.execute(stmt)
         connection.commit()
 
-
 def save_or_update_profile(
         profile_name: str, user_info: dict,
         token_data: dict, expires_at: datetime):
+    """
+    Создает новый профиль с конфигурацией по умолчанию или обновляет
+    токены для существующего.
+    """
     with engine.connect() as connection, connection.begin():
         stmt = select(profiles).where(profiles.c.hh_user_id == user_info['id'])
         existing = connection.execute(stmt).first()
@@ -296,21 +356,26 @@ def save_or_update_profile(
                 profile_name=profile_name, **profile_values))
 
             defaults = get_default_config()
+
             config_main = {k: v for k, v in defaults.items() if k not in
-                           ["negative", "role_ids_config"]}
+                           ["text_include", "negative", "role_ids_config"]}
             config_main["profile_name"] = profile_name
             connection.execute(insert(profile_configs).values(config_main))
 
-            keywords = [{"profile_name": profile_name, "keyword": kw}
-                        for kw in defaults["negative"]]
-            if keywords:
-                connection.execute(insert(config_negative_keywords), keywords)
+            pos_keywords = [{"profile_name": profile_name, "keyword": kw}
+                            for kw in defaults["text_include"]]
+            if pos_keywords:
+                connection.execute(insert(config_positive_keywords), pos_keywords)
+
+            neg_keywords = [{"profile_name": profile_name, "keyword": kw}
+                            for kw in defaults["negative"]]
+            if neg_keywords:
+                connection.execute(insert(config_negative_keywords), neg_keywords)
 
             roles = [{"profile_name": profile_name, "role_id": r_id}
                      for r_id in defaults["role_ids_config"]]
             if roles:
                 connection.execute(insert(config_professional_roles), roles)
-
 
 def load_profile(profile_name: str) -> dict | None:
     with engine.connect() as connection:
@@ -362,26 +427,34 @@ def load_profile_config(profile_name: str) -> dict:
 
         config = dict(result._mapping)
 
+        stmt_pos_keywords = select(config_positive_keywords.c.keyword).where(
+            config_positive_keywords.c.profile_name == profile_name)
+        config["text_include"] = connection.execute(stmt_pos_keywords).scalars().all()
+
         stmt_keywords = select(config_negative_keywords.c.keyword).where(
             config_negative_keywords.c.profile_name == profile_name)
         config["negative"] = connection.execute(stmt_keywords).scalars().all()
 
-        stmt_roles = select(config_professional_roles.c.role_id).where(
-            config_professional_roles.c.profile_name == profile_name)
-        config["role_ids_config"] = connection.execute(stmt_roles).scalars().all()
-
         return config
-
 
 def save_profile_config(profile_name: str, config: dict):
     """Сохраняет полную конфигурацию в связанные таблицы."""
     with engine.connect() as connection, connection.begin():
+        positive_keywords = config.pop("text_include", [])
         negative_keywords = config.pop("negative", [])
         role_ids = config.pop("role_ids_config", [])
         
-        connection.execute(update(profile_configs).where(
-            profile_configs.c.profile_name == profile_name
-        ).values(**config))
+        if config:
+            connection.execute(update(profile_configs).where(
+                profile_configs.c.profile_name == profile_name
+            ).values(**config))
+
+        connection.execute(delete(config_positive_keywords).where(
+            config_positive_keywords.c.profile_name == profile_name))
+        if positive_keywords:
+            connection.execute(insert(config_positive_keywords),
+                               [{"profile_name": profile_name, "keyword": kw}
+                                for kw in positive_keywords])
 
         connection.execute(delete(config_negative_keywords).where(
             config_negative_keywords.c.profile_name == profile_name))

@@ -1,12 +1,12 @@
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import VerticalScroll, Horizontal
+from textual.containers import Vertical, VerticalScroll, Horizontal
 from textual.screen import Screen
 from textual.widgets import (
     Button, Footer, Header, Input, Label, Static, Switch, TextArea, Select
 )
 
-from hhcli.database import load_profile_config, save_profile_config
+from ..database import load_profile_config, save_profile_config
 
 
 class ConfigScreen(Screen):
@@ -23,65 +23,69 @@ class ConfigScreen(Screen):
         self._quit_binding_cyrillic = None
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True, name="hh-cli - Настройки")
-        with VerticalScroll(id="config-form"):
-            yield Static("Параметры поиска", classes="header")
-            yield Label("Ключевые слова для поиска (через запятую):")
-            yield Input(id="text_include", placeholder='Python developer, Backend developer')
-            yield Label("Исключающие слова (через запятую):")
-            yield Input(id="negative", placeholder="senior, C++, DevOps, аналитик")
+        with Vertical(id="config_screen"):
+            yield Header(show_clock=True, name="hh-cli - Настройки")
+            with VerticalScroll(id="config-form"):
+                yield Static("Параметры поиска", classes="header")
+                yield Label("Ключевые слова для поиска (через запятую):")
+                yield Input(id="text_include", placeholder='Python developer, Backend developer')
+                yield Label("Исключающие слова (через запятую):")
+                yield Input(id="negative", placeholder="senior, C++, DevOps, аналитик")
 
-            yield Label("Формат работы:")
-            yield Select([], id="work_format")
+                yield Label("Формат работы:")
+                yield Select([], id="work_format")
 
-            yield Label("ID Города (пока вводится вручную):")
-            yield Input(id="area_id", placeholder="113 (Россия), 1 (Москва)")
+                yield Label("ID Города (пока вводится вручную):")
+                yield Input(id="area_id", placeholder="113 (Россия), 1 (Москва)")
 
-            yield Label("ID Проф. ролей (через запятую, пока вручную):")
-            yield Input(id="role_ids_config", placeholder="96, 104, 107")
+                yield Label("ID Проф. ролей (через запятую, пока вручную):")
+                yield Input(id="role_ids_config", placeholder="96, 104, 107")
 
-            yield Label("Область поиска:")
-            yield Select(
-                [
-                    ("В названии вакансии", "name"),
-                    ("В названии компании", "company_name"),
-                    ("В описании вакансии", "description"),
-                ],
-                id="search_field",
-            )
+                yield Label("Область поиска:")
+                yield Select(
+                    [
+                        ("В названии вакансии", "name"),
+                        ("В названии компании", "company_name"),
+                        ("В описании вакансии", "description"),
+                    ],
+                    id="search_field",
+                )
 
-            yield Label("Период публикации (дней, 1-30):")
-            yield Input(id="period", placeholder="3")
+                yield Label("Период публикации (дней, 1-30):")
+                yield Input(id="period", placeholder="3")
 
-            yield Static("Отображение и отклики", classes="header")
-            yield Horizontal(
-                Switch(id="skip_applied_in_same_company"),
-                Label("Пропускать компании, куда уже был отклик"),
-                classes="switch-container",
-            )
-            yield Horizontal(
-                Switch(id="deduplicate_by_name_and_company"),
-                Label("Убирать дубли по 'Название+Компания'"),
-                classes="switch-container",
-            )
-            yield Horizontal(
-                Switch(id="strikethrough_applied_vac"),
-                Label("Зачеркивать вакансии по точному ID"),
-                classes="switch-container",
-            )
-            yield Horizontal(
-                Switch(id="strikethrough_applied_vac_name"),
-                Label("Зачеркивать вакансии по 'Название+Компания'"),
-                classes="switch-container",
-            )
+                yield Static("Отображение и отклики", classes="header")
+                yield Horizontal(
+                    Switch(id="skip_applied_in_same_company"),
+                    Label("Пропускать компании, куда уже был отклик"),
+                    classes="switch-container",
+                )
+                yield Horizontal(
+                    Switch(id="deduplicate_by_name_and_company"),
+                    Label("Убирать дубли по 'Название+Компания'"),
+                    classes="switch-container",
+                )
+                yield Horizontal(
+                    Switch(id="strikethrough_applied_vac"),
+                    Label("Зачеркивать вакансии по точному ID"),
+                    classes="switch-container",
+                )
+                yield Horizontal(
+                    Switch(id="strikethrough_applied_vac_name"),
+                    Label("Зачеркивать вакансии по 'Название+Компания'"),
+                    classes="switch-container",
+                )
 
-            yield Static("Сопроводительное письмо", classes="header")
-            yield TextArea(id="cover_letter", language="markdown")
+                yield Static("Оформление", classes="header")
+                yield Label("Тема интерфейса:")
+                yield Select([], id="theme")
 
-            yield Button("Сохранить и выйти", variant="success", id="save-button")
+                yield Static("Сопроводительное письмо", classes="header")
+                yield TextArea(id="cover_letter", language="markdown")
 
-        yield Footer()
+                yield Button("Сохранить и выйти", variant="success", id="save-button")
 
+            yield Footer()
 
     def on_mount(self) -> None:
         """При монтировании экрана удаляем глобальные биндинги выхода."""
@@ -99,8 +103,7 @@ class ConfigScreen(Screen):
 
     def _load_data_worker(self) -> None:
         """
-        Эта часть выполняется в фоновом потоке.
-        Только загружает данные, не трогая виджеты.
+        Эта часть выполняется в фоновом потоке, загружает данные, не трогая виджеты.
         """
         profile_name = self.app.client.profile_name
         config = load_profile_config(profile_name)
@@ -110,8 +113,7 @@ class ConfigScreen(Screen):
 
     def _populate_form(self, config: dict, work_formats: list) -> None:
         """
-        Эта часть выполняется в основном потоке.
-        Безопасно обновляет виджеты.
+        Эта часть выполняется в основном потоке, обновляет виджеты.
         """
         self.query_one("#work_format", Select).set_options(
             [(item["name"], item["id"]) for item in work_formats]
@@ -130,6 +132,19 @@ class ConfigScreen(Screen):
         self.query_one("#strikethrough_applied_vac", Switch).value = config.get("strikethrough_applied_vac", True)
         self.query_one("#strikethrough_applied_vac_name", Switch).value = config.get("strikethrough_applied_vac_name", True)
 
+        theme_select = self.query_one("#theme", Select)
+        themes = sorted(self.app.css_manager.themes.values(), key=lambda t: t._name)
+        theme_select.set_options([
+            (self._beautify_theme_name(theme._name), theme._name)
+            for theme in themes
+        ])
+        theme_select.value = config.get("theme", "hhcli-base")
+
+    @staticmethod
+    def _beautify_theme_name(theme_name: str) -> str:
+        name = theme_name.removeprefix("hhcli-").replace("-", " ")
+        return name.title() or theme_name
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-button":
             self.action_save_config()
@@ -137,7 +152,7 @@ class ConfigScreen(Screen):
     def action_save_config(self) -> None:
         """Собрать данные с формы и сохранить в БД."""
         profile_name = self.app.client.profile_name
-        
+
         def parse_list(text: str) -> list[str]:
             """Безопасно парсит строку с запятыми в список строк."""
             return [item.strip() for item in text.split(",") if item.strip()]
@@ -146,7 +161,6 @@ class ConfigScreen(Screen):
             "text_include": parse_list(self.query_one("#text_include", Input).value),
             "negative": parse_list(self.query_one("#negative", Input).value),
             "role_ids_config": parse_list(self.query_one("#role_ids_config", Input).value),
-            
             "work_format": self.query_one("#work_format", Select).value,
             "area_id": self.query_one("#area_id", Input).value,
             "search_field": self.query_one("#search_field", Select).value,
@@ -156,8 +170,10 @@ class ConfigScreen(Screen):
             "deduplicate_by_name_and_company": self.query_one("#deduplicate_by_name_and_company", Switch).value,
             "strikethrough_applied_vac": self.query_one("#strikethrough_applied_vac", Switch).value,
             "strikethrough_applied_vac_name": self.query_one("#strikethrough_applied_vac_name", Switch).value,
+            "theme": self.query_one("#theme", Select).value or "hhcli-base",
         }
-        
+
         save_profile_config(profile_name, config)
+        self.app.css_manager.set_theme(config["theme"])
         self.app.notify("Настройки успешно сохранены.", title="Успех", severity="information")
         self.app.pop_screen()

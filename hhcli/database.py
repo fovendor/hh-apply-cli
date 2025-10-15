@@ -4,9 +4,23 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from platformdirs import user_data_dir
-from sqlalchemy import (create_engine, MetaData, Table, Column,
-                        Integer, String, DateTime, Text, Boolean,
-                        ForeignKey, insert, select, delete, update)
+from sqlalchemy import (
+    create_engine,
+    MetaData,
+    Table,
+    Column,
+    Integer,
+    String,
+    DateTime,
+    Text,
+    Boolean,
+    ForeignKey,
+    insert,
+    select,
+    delete,
+    update,
+    text as sa_text,
+)
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -55,6 +69,7 @@ def get_default_config() -> dict[str, Any]:
         "deduplicate_by_name_and_company": True,
         "strikethrough_applied_vac": True,
         "strikethrough_applied_vac_name": True,
+        "theme": "hhcli-base",
     }
 
 
@@ -78,6 +93,7 @@ profile_configs = Table(
     Column("search_field", String),
     Column("period", String),
     Column("cover_letter", Text),
+    Column("theme", String, nullable=False, server_default="hhcli-base"),
     Column("skip_applied_in_same_company", Boolean, nullable=False,
            default=False),
     Column("deduplicate_by_name_and_company", Boolean, nullable=False,
@@ -243,6 +259,29 @@ def init_db():
     print(f"INFO: База данных используется по пути: {DB_PATH}")
     engine = create_engine(f"sqlite:///{DB_PATH}")
     metadata.create_all(engine)
+    ensure_schema_upgrades()
+
+
+def ensure_schema_upgrades() -> None:
+    """Гарантирует наличие новых колонок в существующей БД."""
+    if not engine:
+        return
+
+    default_theme = get_default_config()["theme"]
+
+    with engine.begin() as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(
+                sa_text("PRAGMA table_info(profile_configs)")
+            )
+        }
+        if "theme" not in columns:
+            connection.execute(sa_text("ALTER TABLE profile_configs ADD COLUMN theme TEXT"))
+            connection.execute(
+                sa_text("UPDATE profile_configs SET theme = :theme WHERE theme IS NULL"),
+                {"theme": default_theme},
+            )
 
 
 def log_to_db(level: str, source: str, message: str):
@@ -426,6 +465,8 @@ def load_profile_config(profile_name: str) -> dict:
             return get_default_config()
 
         config = dict(result._mapping)
+        defaults = get_default_config()
+        config.setdefault("theme", defaults["theme"])
 
         stmt_pos_keywords = select(config_positive_keywords.c.keyword).where(
             config_positive_keywords.c.profile_name == profile_name)
@@ -434,6 +475,10 @@ def load_profile_config(profile_name: str) -> dict:
         stmt_keywords = select(config_negative_keywords.c.keyword).where(
             config_negative_keywords.c.profile_name == profile_name)
         config["negative"] = connection.execute(stmt_keywords).scalars().all()
+
+        stmt_roles = select(config_professional_roles.c.role_id).where(
+            config_professional_roles.c.profile_name == profile_name)
+        config["role_ids_config"] = connection.execute(stmt_roles).scalars().all()
 
         return config
 

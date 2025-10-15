@@ -1,0 +1,238 @@
+# Общие настройки
+
+Screen {
+    background: $background1;
+    color: $foreground2;
+}
+
+Static, Label {
+    color: $foreground3;
+}
+
+Markdown {
+    background: $background2;
+    color: $foreground3;
+    padding: 0 1;
+    border: solid $background3;
+    border-title-align: left;
+}
+
+.loading-indicator {
+    color: $secondary;
+}
+
+# Панели и таблицы
+
+DataTable {
+    background: transparent;
+    color: $foreground3;
+    border: none;
+    scrollbar-color: $primary;
+    scrollbar-background: $background3 60%;
+}
+
+DataTable:focus {
+    border: none;
+}
+
+DataTable > .datatable--header {
+    background: $background3;
+    color: $foreground1;
+}
+
+#vacancy_screen,
+#config_screen {
+    height: 100%;
+}
+
+.pane {
+    background: $background2;
+    border: solid $background3;
+    border-title-color: $foreground1;
+    border-title-background: $background3;
+    border-title-align: left;
+    padding: 1 0 0 0;
+    margin: 0;
+    height: 1fr;
+}
+
+#vacancy_panel {
+    margin-left: 0;
+}
+
+#details_panel {
+    padding: 0 0 0 0;
+}
+
+#vacancy_layout {
+    height: 1fr;
+    padding: 0;
+}
+
+#details_pane {
+    padding: 0 0 0 0;
+    background: transparent;
+}
+
+#vacancy_details {
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
+LoadingIndicator {
+    color: $secondary;
+}
+
+SelectionList {
+    background: transparent;
+    padding: 0;
+    height: 1fr;
+    border: none;
+}
+
+SelectionList > .selection-list--button,
+SelectionList > .selection-list--button-highlighted,
+SelectionList > .selection-list--button-selected,
+SelectionList > .selection-list--button-selected-highlighted {
+    background: transparent;
+    border: none;
+    padding: 0 1;
+}
+
+SelectionList > .selection-list--button-highlighted,
+SelectionList > .selection-list--button-selected-highlighted {
+    background: $background3 35%;
+}
+
+SelectionList > .selection-list--button-selected,
+SelectionList > .selection-list--button-selected-highlighted {
+    color: $primary;
+}
+
+SelectionList:focus {
+    border: none;
+}
+
+# Резюме / профили
+
+#resume_table,
+#profile_table {
+    min-height: 20;
+}
+
+# Form
+
+#config-form {
+    padding: 1 2;
+    background: $background2;
+    border: solid $background3;
+}
+
+#config-form > .header {
+    background: $background3;
+    color: $foreground1;
+    padding: 1;
+    margin: 1 0;
+    text-style: bold;
+    text-align: center;
+}
+
+.switch-container {
+    align: left middle;
+    padding: 0 1;
+    background: transparent;
+    height: auto;
+}
+
+.switch-container > Switch {
+    width: auto;
+    margin-right: 2;
+}
+
+Select {
+    padding: 0;
+}
+
+Input,
+TextArea {
+    border: solid transparent;
+    padding: 0;
+}
+
+Input:focus,
+Select:focus,
+TextArea:focus {
+    border: solid $primary;
+}
+
+TextArea {
+    min-height: 12;
+    scrollbar-color: $secondary;
+}
+
+#cover_letter {
+    height: 15;
+}
+
+Button {
+    background: $background3;
+    color: $foreground1;
+    border: solid $background3;
+    text-style: bold;
+    padding: 0 1;
+}
+
+Button:hover {
+    background: $secondary 40%;
+}
+
+Button:focus {
+    border: solid $primary;
+}
+
+Button.-success {
+    background: $green;
+    color: $background1;
+}
+
+# Уведомления
+
+Notification {
+    background: $background3;
+    color: $foreground3;
+    border: solid $primary;
+}
+
+Notification.-information {
+    border: solid $secondary;
+}
+
+Notification.-warning {
+    border: solid $yellow;
+}
+
+Notification.-error {
+    border: solid $red;
+}
+
+# Scrollbars/links
+
+* {
+    scrollbar-size: 1 1;
+    scrollbar-background: $background3;
+    scrollbar-color: $primary;
+    scrollbar-background-hover: $background2;
+    scrollbar-color-hover: $secondary;
+    link-color: $primary;
+}
+
+Switch {
+    background: $background1;
+    color: $foreground1;
+    border: solid $background3;
+}
+
+Switch:focus {
+    border: solid $primary;
+}

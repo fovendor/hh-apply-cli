@@ -2,7 +2,7 @@ import os
 import sys
 from hhcli.client import HHApiClient
 from hhcli.database import init_db, set_active_profile, get_active_profile_name, log_to_db
-from hhcli.tui import HHCliApp
+from hhcli.ui.tui import HHCliApp
 
 CLIENT_ID = os.getenv("HH_CLIENT_ID")
 CLIENT_SECRET = os.getenv("HH_CLIENT_SECRET")
@@ -19,7 +19,6 @@ def run():
 
     args = sys.argv[1:]
 
-    # Обработка команды --auth
     if "--auth" in args:
         try:
             profile_index = args.index("--auth") + 1
@@ -40,7 +39,6 @@ def run():
         log_to_db("INFO", "Main", "Приложение hhcli завершило работу после аутентификации.")
         return
 
-    # Основная логика запуска
     active_profile = get_active_profile_name()
     if not active_profile:
         log_to_db("WARN", "Main", "Активный профиль не найден. Вывод подсказки и завершение.")
@@ -57,7 +55,6 @@ def run():
         print(f"Ошибка: {e}")
         return
 
-    # Создаем и запускаем TUI-приложение
     app = HHCliApp(client=client)
 
     log_to_db("INFO", "Main", "Запуск TUI.")

@@ -1,26 +1,46 @@
 import html
 import random
-from typing import Optional
+from typing import Iterable, Optional
 
 import html2text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Center, Horizontal, VerticalScroll
+from textual.containers import Center, Horizontal, Vertical, VerticalScroll
 from textual.events import Key
 from textual.screen import Screen
 from textual.timer import Timer
 from textual.widgets import (
-    DataTable, Footer, Header, Input, LoadingIndicator, Markdown, Static
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    LoadingIndicator,
+    Markdown,
+    SelectionList,
+    Static,
+)
+from textual.widgets._selection_list import Selection
+from rich.text import Text
+
+from ..database import (
+    get_active_profile_name,
+    get_all_profiles,
+    get_full_negotiation_history_for_profile,
+    load_profile_config,
+    log_to_db,
+    record_apply_action,
+    save_vacancy_to_cache,
+    set_active_profile,
+    get_vacancy_from_cache,
+    get_dictionary_from_cache,
+    save_dictionary_to_cache,
 )
 
-from hhcli.database import (
-    get_active_profile_name, get_all_profiles, get_full_negotiation_history_for_profile,
-    load_profile_config, log_to_db, record_apply_action, save_vacancy_to_cache,
-    set_active_profile, get_vacancy_from_cache, get_dictionary_from_cache,
-    save_dictionary_to_cache
-)
+from .config_screen import ConfigScreen
+from .css_manager import CssManager
 
-from hhcli.config_screen import ConfigScreen
+CSS_MANAGER = CssManager()
+
 
 def _normalize(text: Optional[str]) -> str:
     if not text:
@@ -67,10 +87,11 @@ def _collect_delivered(history: list[dict]) -> tuple[set[str], set[str]]:
         vid = str(h.get("vacancy_id") or "")
         if vid in delivered_ids:
             k = f"{_normalize(h.get('vacancy_title'))}|{_normalize(h.get('employer_name'))}"
-            if k.strip("|"):
+            if k.strip('|'):
                 delivered_keys.add(k)
 
     return delivered_ids, delivered_keys
+
 
 class ApplyConfirmationScreen(Screen):
     """Экран подтверждения отправки откликов."""
@@ -111,6 +132,8 @@ class VacancyListScreen(Screen):
         Binding("x", "toggle_select", "Выбрать", show=True),
         Binding("a", "apply_for_selected", "Откликнуться"),
         Binding("escape", "app.pop_screen", "Назад"),
+        Binding("c", "edit_config", "Настройки", show=True),
+        Binding("с", "edit_config", "Настройки (RU)", show=False),
     ]
     _debounce_timer: Optional[Timer] = None
 
@@ -120,7 +143,6 @@ class VacancyListScreen(Screen):
         self.resume_id = resume_id
         self.selected_vacancies: set[str] = set()
         self.vacancies_by_id = {v["id"]: v for v in vacancies}
-        self.index_to_id: list[str] = []
         self._pending_details_id: Optional[str] = None
 
         self.html_converter = html2text.HTML2Text()
@@ -129,25 +151,62 @@ class VacancyListScreen(Screen):
         self.html_converter.ignore_images = True
         self.html_converter.mark_code = True
 
+    @staticmethod
+    def _format_segment(
+        content: str | None,
+        width: int,
+        *,
+        style: str | None = None,
+        strike: bool = False,
+    ) -> Text:
+        segment = Text(content or "", no_wrap=True, overflow="ellipsis")
+        segment.truncate(width, overflow="ellipsis")
+        if strike:
+            segment.stylize("strike", 0, len(segment))
+        if style:
+            segment.stylize(style, 0, len(segment))
+        padding = max(0, width - segment.cell_len)
+        if padding:
+            segment.append(" " * padding)
+        return segment
+
+    @staticmethod
+    def _selection_values(options: Iterable[Selection | str]) -> set[str]:
+        values: set[str] = set()
+        for option in options:
+            value = getattr(option, "value", option)
+            if value and value != "__none__":
+                values.add(str(value))
+        return values
+
+    def _update_selected_from_list(self, selection_list: SelectionList) -> None:
+        self.selected_vacancies = self._selection_values(selection_list.selected)
+
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True, name="hh-cli")
-        with Horizontal():
-            yield DataTable(id="vacancy_table", cursor_type="row", zebra_stripes=True)
-            with VerticalScroll(id="details_pane"):
-                yield Markdown(
-                    "[dim]Выберите вакансию слева, чтобы увидеть детали.[/dim]",
-                    id="vacancy_details",
-                )
-                yield LoadingIndicator()
-        yield Footer()
+        with Vertical(id="vacancy_screen"):
+            yield Header(show_clock=True, name="hh-cli")
+            with Horizontal(id="vacancy_layout"):
+                with Vertical(id="vacancy_panel", classes="pane") as vacancy_panel:
+                    vacancy_panel.border_title = "Вакансии"
+                    vacancy_panel.styles.border_title_align = "left"
+                    yield SelectionList(id="vacancy_list")
+                with Vertical(id="details_panel", classes="pane") as details_panel:
+                    details_panel.border_title = "Детали"
+                    details_panel.styles.border_title_align = "left"
+                    with VerticalScroll(id="details_pane"):
+                        yield Markdown(
+                            "[dim]Выберите вакансию слева, чтобы увидеть детали.[/dim]",
+                            id="vacancy_details",
+                        )
+                        yield LoadingIndicator()
+            yield Footer()
 
     def on_mount(self) -> None:
-        table = self.query_one(DataTable)
-        table.add_columns("✓", "№", "Вакансия", "Компания", "З/П")
-        self.index_to_id.clear()
+        vacancy_list = self.query_one(SelectionList)
+        vacancy_list.clear_options()
 
         if not self.vacancies:
-            table.add_row("", "", "Вакансии не найдены.")
+            vacancy_list.add_option(Selection("Вакансии не найдены.", "__none__", disabled=True))
             self.query_one(LoadingIndicator).display = False
             return
 
@@ -157,20 +216,20 @@ class VacancyListScreen(Screen):
 
         delivered_ids, delivered_keys = _collect_delivered(history)
 
-        for i, vac in enumerate(self.vacancies):
+        for vac in self.vacancies:
             salary = vac.get("salary")
-            salary_str = "[dim]не указана[/dim]"
+            salary_plain = "не указана"
             if salary:
                 cur = (salary.get("currency") or "").upper()
                 s_from, s_to = salary.get("from"), salary.get("to")
                 if s_from and s_to:
-                    salary_str = f"{s_from:,}-{s_to:,} {cur}".replace(",", " ")
+                    salary_plain = f"{s_from:,}-{s_to:,} {cur}".replace(",", " ")
                 elif s_from:
-                    salary_str = f"от {s_from:,} {cur}".replace(",", " ")
+                    salary_plain = f"от {s_from:,} {cur}".replace(",", " ")
                 elif s_to:
-                    salary_str = f"до {s_to:,} {cur}".replace(",", " ")
+                    salary_plain = f"до {s_to:,} {cur}".replace(",", " ")
 
-            vac_name = vac["name"]
+            raw_name = vac["name"]
             strike = False
 
             if config.get("strikethrough_applied_vac") and vac["id"] in delivered_ids:
@@ -181,28 +240,38 @@ class VacancyListScreen(Screen):
                 if key in delivered_keys:
                     strike = True
 
-            if strike:
-                vac_name = f"[s]{vac_name}[/s]"
+            title_segment = self._format_segment(raw_name, 40, strike=strike)
+            company_segment = self._format_segment(vac["employer"].get("name"), 24, style="dim")
+            salary_segment = self._format_segment(salary_plain, 18, style="cyan")
 
-            table.add_row("[ ]", str(i + 1), vac_name, vac["employer"]["name"], salary_str)
-            self.index_to_id.append(vac["id"])
+            prompt = Text.assemble(title_segment, Text("  "), company_segment, Text("  "), salary_segment)
+            vacancy_list.add_option(Selection(prompt, vac["id"]))
 
+        vacancy_list.highlighted = 0 if vacancy_list.option_count else None
+        vacancy_list.focus()
+        self._update_selected_from_list(vacancy_list)
         self.query_one(LoadingIndicator).display = False
+        if vacancy_list.option_count:
+            first_option = vacancy_list.get_option_at_index(0)
+            if first_option.value not in (None, "__none__"):
+                self.load_vacancy_details(str(first_option.value))
 
-    def _current_vacancy_id(self) -> Optional[str]:
-        table = self.query_one(DataTable)
-        idx = table.cursor_row
-        if idx is None or idx < 0 or idx >= len(self.index_to_id):
-            return None
-        return self.index_to_id[idx]
-
-    def on_data_table_row_highlighted(self, _: DataTable.RowHighlighted) -> None:
+    def on_selection_list_selection_highlighted(
+        self, event: SelectionList.SelectionHighlighted
+    ) -> None:
         if self._debounce_timer:
             self._debounce_timer.stop()
-        vacancy_id = self._current_vacancy_id()
-        if not vacancy_id:
+        vacancy_id = event.selection.value
+        if not vacancy_id or vacancy_id == "__none__":
             return
-        self._debounce_timer = self.set_timer(0.3, lambda vid=vacancy_id: self.load_vacancy_details(vid))
+        self._debounce_timer = self.set_timer(
+            0.2, lambda vid=str(vacancy_id): self.load_vacancy_details(vid)
+        )
+
+    def on_selection_list_selection_toggled(
+        self, event: SelectionList.SelectionToggled
+    ) -> None:
+        self._update_selected_from_list(event.selection_list)
 
     def load_vacancy_details(self, vacancy_id: Optional[str]) -> None:
         if not vacancy_id:
@@ -233,6 +302,7 @@ class VacancyListScreen(Screen):
             self.app.call_from_thread(
                 self.query_one("#vacancy_details").update, f"Ошибка загрузки: {exc}"
             )
+
     def display_vacancy_details(self, details: dict, vacancy_id: str) -> None:
         if self._pending_details_id != vacancy_id:
             return
@@ -244,13 +314,13 @@ class VacancyListScreen(Screen):
             s_to = salary_data.get("to")
             currency = (salary_data.get("currency") or "").upper()
             gross_str = " (до вычета налогов)" if salary_data.get("gross") else ""
-            
+
             parts = []
             if s_from:
                 parts.append(f"от {s_from:,}".replace(",", " "))
             if s_to:
                 parts.append(f"до {s_to:,}".replace(",", " "))
-            
+
             if parts:
                 salary_str = " ".join(parts)
                 salary_line = f"**Зарплата:** {salary_str} {currency}{gross_str}\n"
@@ -261,7 +331,7 @@ class VacancyListScreen(Screen):
         skills_text = "* " + "\n* ".join(s["name"] for s in skills) if skills else "Не указаны"
 
         doc = (
-            f"# {details['name']}\n\n"
+            f"## {details['name']}\n\n"
             f"{salary_line}\n"
             f"**Компания:** {details['employer']['name']}\n\n"
             f"**Ссылка:** {details['alternate_url']}\n\n"
@@ -283,26 +353,27 @@ class VacancyListScreen(Screen):
         self._toggle_current_selection()
 
     def _toggle_current_selection(self) -> None:
-        vacancy_id = self._current_vacancy_id()
-        if not vacancy_id:
+        selection_list = self.query_one(SelectionList)
+        if selection_list.highlighted is None:
             return
-        table = self.query_one(DataTable)
-        coord = (table.cursor_row, 0)
-        if vacancy_id in self.selected_vacancies:
-            self.selected_vacancies.remove(vacancy_id)
-            table.update_cell_at(coord, "[ ]")
-            log_to_db("INFO", "VacancyListScreen", f"Сняли выбор: {vacancy_id}")
-        else:
-            self.selected_vacancies.add(vacancy_id)
-            table.update_cell_at(coord, "[green]x[/]")
-            log_to_db("INFO", "VacancyListScreen", f"Выбрали: {vacancy_id}")
-        table.refresh()
+        selection = selection_list.get_option_at_index(selection_list.highlighted)
+        if selection.value in (None, "__none__"):
+            return
+        selection_list.action_select()
+        log_to_db("INFO", "VacancyListScreen", f"Переключили выбор: {selection.value}")
 
     def action_apply_for_selected(self) -> None:
         if not self.selected_vacancies:
-            self.app.notify("Нет выбранных вакансий.", title="Внимание", severity="warning")
-            return
+            selection_list = self.query_one(SelectionList)
+            self._update_selected_from_list(selection_list)
+            if not self.selected_vacancies:
+                self.app.notify("Нет выбранных вакансий.", title="Внимание", severity="warning")
+                return
         self.app.push_screen(ApplyConfirmationScreen(len(self.selected_vacancies)), self.on_apply_confirmed)
+
+    def action_edit_config(self) -> None:
+        """Открыть экран редактирования конфигурации из списка вакансий."""
+        self.app.push_screen(ConfigScreen())
 
     def on_apply_confirmed(self, ok: bool) -> None:
         if not ok:
@@ -313,7 +384,6 @@ class VacancyListScreen(Screen):
     async def run_apply_worker(self) -> None:
         profile_name = self.app.client.profile_name
         cover_letter = load_profile_config(profile_name).get("cover_letter", "")
-        table = self.query_one(DataTable)
 
         for vacancy_id in list(self.selected_vacancies):
             v = self.vacancies_by_id.get(vacancy_id, {})
@@ -332,11 +402,14 @@ class VacancyListScreen(Screen):
                 )
                 record_apply_action(vacancy_id, profile_name, vac_title, emp, "failed", reason)
 
-        self.app.call_from_thread(self.app.notify, "Все отклики обработаны.", title="Готово")
-        self.selected_vacancies.clear()
-        for row in range(table.row_count):
-            table.update_cell_at((row, 0), "[ ]", update_width=True)
-        table.refresh()
+        def finalize() -> None:
+            self.app.notify("Все отклики обработаны.", title="Готово")
+            self.selected_vacancies.clear()
+            selection_list = self.query_one(SelectionList)
+            selection_list.deselect_all()
+            self._update_selected_from_list(selection_list)
+
+        self.app.call_from_thread(finalize)
 
 
 class ResumeSelectionScreen(Screen):
@@ -476,29 +549,8 @@ class ProfileSelectionScreen(Screen):
 class HHCliApp(App):
     """Основное TUI-приложение."""
 
-    CSS = """
-    #vacancy_table { width: 105; min-width: 45; }
-    #details_pane { padding: 0 1; }
-    #config-form { padding: 0 2; }
-    #config-form > .header {
-        background: $primary;
-        color: $text;
-        padding: 1;
-        margin-top: 1;
-        text-align: center;
-    }
-    .switch-container {
-        align: left middle;
-        height: auto;
-    }
-    .switch-container > Switch {
-        width: auto;
-        margin-right: 2;
-    }
-    #cover_letter {
-        height: 15;
-    }
-    """
+    CSS_PATH = CSS_MANAGER.css_file
+    ENABLE_COMMAND_PALETTE = False
 
     BINDINGS = [
         Binding("q", "quit", "Выход", show=True, priority=True),
@@ -506,9 +558,11 @@ class HHCliApp(App):
     ]
 
     def __init__(self, client) -> None:
-        super().__init__()
+        super().__init__(watch_css=True)
         self.client = client
         self.dictionaries = {}
+        self.css_manager = CSS_MANAGER
+        self.title = "hh-cli"
 
     async def on_mount(self) -> None:
         log_to_db("INFO", "TUI", "Приложение смонтировано")
@@ -544,7 +598,9 @@ class HHCliApp(App):
         try:
             self.client.load_profile_data(profile_name)
             self.sub_title = f"Профиль: {profile_name}"
-            
+            profile_config = load_profile_config(profile_name)
+            self.css_manager.set_theme(profile_config.get("theme", "hhcli-base"))
+
             self.run_worker(self.cache_dictionaries, thread=True, name="DictCacheWorker")
 
             self.app.notify("Синхронизация истории откликов...", title="Синхронизация", timeout=2)
@@ -581,5 +637,5 @@ class HHCliApp(App):
 
     def action_quit(self) -> None:
         log_to_db("INFO", "TUI", "Пользователь запросил выход.")
+        self.css_manager.cleanup()
         self.exit()
-

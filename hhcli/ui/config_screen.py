@@ -34,6 +34,22 @@ def _normalize(text: str | None) -> str:
     return " ".join(str(text).lower().split())
 
 
+def _select_value(widget: Select) -> str | None:
+    """Return a plain value for Select widgets, normalizing the blank sentinel."""
+    value = widget.value
+    if value is None or value is Select.BLANK:
+        return None
+    return value
+
+
+def _set_select_value(widget: Select, value: str | None) -> None:
+    """Safely restore saved values to Select widgets, clearing when empty."""
+    if value:
+        widget.value = value
+    else:
+        widget.clear()
+
+
 @dataclass
 class AreaOption:
     id: str
@@ -386,8 +402,8 @@ class ConfigScreen(Screen):
 
         self.query_one("#text_include", Input).value = ", ".join(config.get("text_include", []))
         self.query_one("#negative", Input).value = ", ".join(config.get("negative", []))
-        self.query_one("#work_format", Select).value = config.get("work_format")
-        self.query_one("#search_field", Select).value = config.get("search_field")
+        _set_select_value(self.query_one("#work_format", Select), config.get("work_format"))
+        _set_select_value(self.query_one("#search_field", Select), config.get("search_field"))
         self.query_one("#period", Input).value = config.get("period", "")
         self.query_one("#cover_letter", TextArea).load_text(config.get("cover_letter", ""))
         self.query_one("#skip_applied_in_same_company", Switch).value = config.get("skip_applied_in_same_company", False)
@@ -514,9 +530,9 @@ class ConfigScreen(Screen):
             "text_include": parse_list(self.query_one("#text_include", Input).value),
             "negative": parse_list(self.query_one("#negative", Input).value),
             "role_ids_config": list(self._selected_role_ids),
-            "work_format": self.query_one("#work_format", Select).value,
+            "work_format": _select_value(self.query_one("#work_format", Select)),
             "area_id": self._selected_area_id or "",
-            "search_field": self.query_one("#search_field", Select).value,
+            "search_field": _select_value(self.query_one("#search_field", Select)),
             "period": self.query_one("#period", Input).value,
             "cover_letter": self.query_one("#cover_letter", TextArea).text,
             "skip_applied_in_same_company": self.query_one("#skip_applied_in_same_company", Switch).value,

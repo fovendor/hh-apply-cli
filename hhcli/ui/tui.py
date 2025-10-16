@@ -19,6 +19,7 @@ from textual.widgets import (
     SelectionList,
     Static,
 )
+from textual.widgets._option_list import OptionList
 from textual.widgets._selection_list import Selection
 from rich.text import Text
 
@@ -41,6 +42,34 @@ from .config_screen import ConfigScreen
 from .css_manager import CssManager
 
 CSS_MANAGER = CssManager()
+
+
+class VacancySelectionList(SelectionList[str]):
+    """Selection list that ignores pointer toggles; selections are keyboard-controlled."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._allow_toggle = False
+
+    def toggle_current(self) -> None:
+        """Toggle the highlighted option via code (used by hotkeys)."""
+        if self.highlighted is None:
+            return
+        self._allow_toggle = True
+        self.action_select()
+
+    def _on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if self._allow_toggle:
+            self._allow_toggle = False
+            super()._on_option_list_option_selected(event)
+            return
+
+        event.stop()
+        self._allow_toggle = False
+        if event.option_index != self.highlighted:
+            self.highlighted = event.option_index
+        else:
+            self.post_message(self.SelectionHighlighted(self, event.option_index))
 
 
 def _normalize(text: Optional[str]) -> str:
@@ -229,7 +258,7 @@ class VacancyListScreen(Screen):
                     vacancy_panel.border_title = "Вакансии"
                     vacancy_panel.styles.border_title_align = "left"
                     yield Static(id="vacancy_list_header")
-                    yield SelectionList(id="vacancy_list")
+                    yield VacancySelectionList(id="vacancy_list")
                 with Vertical(id="details_panel", classes="pane") as details_panel:
                     details_panel.border_title = "Детали"
                     details_panel.styles.border_title_align = "left"
@@ -242,7 +271,7 @@ class VacancyListScreen(Screen):
             yield Footer()
 
     def on_mount(self) -> None:
-        vacancy_list = self.query_one(SelectionList)
+        vacancy_list = self.query_one(VacancySelectionList)
         vacancy_list.clear_options()
         header = self.query_one("#vacancy_list_header", Static)
         header.update(
@@ -406,13 +435,13 @@ class VacancyListScreen(Screen):
         self._toggle_current_selection()
 
     def _toggle_current_selection(self) -> None:
-        selection_list = self.query_one(SelectionList)
+        selection_list = self.query_one(VacancySelectionList)
         if selection_list.highlighted is None:
             return
         selection = selection_list.get_option_at_index(selection_list.highlighted)
         if selection.value in (None, "__none__"):
             return
-        selection_list.action_select()
+        selection_list.toggle_current()
         log_to_db("INFO", "VacancyListScreen", f"Переключили выбор: {selection.value}")
 
     def action_apply_for_selected(self) -> None:

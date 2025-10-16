@@ -53,7 +53,7 @@ class AreaPickerDialog(ModalScreen[str | None]):
 
     BINDINGS = [
         Binding("escape", "cancel", "Отмена"),
-        Binding("enter", "apply", "Выбрать"),
+        Binding("enter", "apply", "Применить"),
     ]
 
     def __init__(self, options: list[AreaOption], selected: str | None) -> None:
@@ -67,8 +67,10 @@ class AreaPickerDialog(ModalScreen[str | None]):
             yield Static("Выберите регион", classes="picker__title")
             yield Input(placeholder="Начните вводить название...", id="picker-search")
             yield SelectionList(id="picker-list")
+            yield Static("[dim]Пробел — выбрать, Enter — применить[/dim]", classes="picker__hint")
             with Horizontal(classes="picker__buttons"):
-                yield Button("Выбрать", id="picker-apply", variant="primary")
+                yield Button("Применить", id="picker-apply", variant="primary")
+                yield Button("Очистить", id="picker-clear", variant="warning")
                 yield Button("Отмена", id="picker-cancel")
 
     def on_mount(self) -> None:
@@ -86,20 +88,26 @@ class AreaPickerDialog(ModalScreen[str | None]):
     ) -> None:
         event.stop()
         if event.selection_list.id == "picker-list":
-            self.selected_id = str(event.option.value)
-            self.dismiss(self.selected_id)
+            value = str(event.option.value)
+            self.selected_id = None if self.selected_id == value else value
+            self._refresh(self._search.value)
 
     def on_selection_list_selection_toggled(
         self, event: SelectionList.SelectionToggled
     ) -> None:
-        if event.selection_list.id == "picker-list":
-            self.selected_id = next(
-                (str(value) for value in event.selection_list.selected), None
-            )
+        if event.selection_list.id != "picker-list":
+            return
+        value = str(event.selection.value)
+        selected_values = {str(val) for val in event.selection_list.selected}
+        self.selected_id = value if value in selected_values else None
+        self._refresh(self._search.value)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "picker-apply":
             self.dismiss(self.selected_id)
+        elif event.button.id == "picker-clear":
+            self.selected_id = None
+            self._refresh(self._search.value)
         elif event.button.id == "picker-cancel":
             self.dismiss(None)
 
@@ -120,6 +128,7 @@ class AreaPickerDialog(ModalScreen[str | None]):
         else:
             candidates = self.options[:200]
         self._filtered = candidates
+        self._list.deselect_all()
         self._list.clear_options()
         for option in candidates:
             self._list.add_option(
@@ -484,8 +493,6 @@ class ConfigScreen(Screen):
         )
 
     def _on_area_picker_closed(self, area_id: str | None) -> None:
-        if area_id is None:
-            return
         self._selected_area_id = area_id
         self._update_area_summary()
 

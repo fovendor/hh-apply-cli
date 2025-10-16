@@ -5,6 +5,44 @@ Screen {
     color: $foreground2;
 }
 
+Footer {
+    background: $background2;
+    color: $foreground1;
+    dock: bottom;
+    height: auto;
+    min-height: 1;
+    padding: 0 1;
+}
+
+Footer > .footer--description {
+    color: $foreground2;
+}
+
+Footer > .footer--key {
+    background: $background3 60%;
+    color: $foreground3;
+    text-style: bold;
+}
+
+Footer > .footer--highlight {
+    background: $primary 35%;
+    color: $foreground3;
+    text-style: bold;
+}
+
+Footer > .footer--highlight-key {
+    background: $primary;
+    color: $background1;
+    text-style: bold;
+}
+
+#vacancy_list_header {
+    background: transparent;
+    color: $foreground2;
+    padding: 0 1;
+    text-style: bold;
+}
+
 Static, Label {
     color: $foreground3;
 }

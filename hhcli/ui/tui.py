@@ -62,11 +62,12 @@ def _is_failed(status: Optional[str]) -> bool:
     return any(m in s for m in FAILED_MARKERS)
 
 
-def _collect_delivered(history: list[dict]) -> tuple[set[str], set[str]]:
+def _collect_delivered(history: list[dict]) -> tuple[set[str], set[str], set[str]]:
     """
     Возвращает:
       delivered_ids  — id вакансий, куда отклик действительно ушёл (и последний статус не failed)
       delivered_keys — ключи "title|employer" только для delivered_ids (для опционального матчинга по имени)
+      delivered_employers — нормализованные названия компаний, куда уже откликались
     """
     by_id: dict[str, list[dict]] = {}
     for h in history:
@@ -83,14 +84,18 @@ def _collect_delivered(history: list[dict]) -> tuple[set[str], set[str]]:
             delivered_ids.add(vid)
 
     delivered_keys: set[str] = set()
+    delivered_employers: set[str] = set()
     for h in history:
         vid = str(h.get("vacancy_id") or "")
         if vid in delivered_ids:
             k = f"{_normalize(h.get('vacancy_title'))}|{_normalize(h.get('employer_name'))}"
             if k.strip('|'):
                 delivered_keys.add(k)
+            employer = _normalize(h.get("employer_name"))
+            if employer:
+                delivered_employers.add(employer)
 
-    return delivered_ids, delivered_keys
+    return delivered_ids, delivered_keys, delivered_employers
 
 
 class ApplyConfirmationScreen(Screen):
@@ -137,6 +142,11 @@ class VacancyListScreen(Screen):
     ]
     _debounce_timer: Optional[Timer] = None
 
+    ID_WIDTH = 5
+    TITLE_WIDTH = 40
+    COMPANY_WIDTH = 24
+    PREVIOUS_WIDTH = 8
+
     def __init__(self, vacancies: list[dict], resume_id: str) -> None:
         super().__init__()
         self.vacancies = vacancies
@@ -182,6 +192,34 @@ class VacancyListScreen(Screen):
     def _update_selected_from_list(self, selection_list: SelectionList) -> None:
         self.selected_vacancies = self._selection_values(selection_list.selected)
 
+    def _build_row_text(
+        self,
+        *,
+        index: str,
+        title: str,
+        company: str | None,
+        previous: str,
+        strike: bool = False,
+        index_style: str | None = None,
+        title_style: str | None = None,
+        company_style: str | None = "dim",
+        previous_style: str | None = None,
+    ) -> Text:
+        index_segment = self._format_segment(index, self.ID_WIDTH, style=index_style)
+        title_segment = self._format_segment(title, self.TITLE_WIDTH, style=title_style, strike=strike)
+        company_segment = self._format_segment(company, self.COMPANY_WIDTH, style=company_style)
+        previous_segment = self._format_segment(previous, self.PREVIOUS_WIDTH, style=previous_style)
+
+        return Text.assemble(
+            index_segment,
+            Text("  "),
+            title_segment,
+            Text("  "),
+            company_segment,
+            Text("  "),
+            previous_segment,
+        )
+
     def compose(self) -> ComposeResult:
         with Vertical(id="vacancy_screen"):
             yield Header(show_clock=True, name="hh-cli")
@@ -189,6 +227,7 @@ class VacancyListScreen(Screen):
                 with Vertical(id="vacancy_panel", classes="pane") as vacancy_panel:
                     vacancy_panel.border_title = "Вакансии"
                     vacancy_panel.styles.border_title_align = "left"
+                    yield Static(id="vacancy_list_header")
                     yield SelectionList(id="vacancy_list")
                 with Vertical(id="details_panel", classes="pane") as details_panel:
                     details_panel.border_title = "Детали"
@@ -204,6 +243,19 @@ class VacancyListScreen(Screen):
     def on_mount(self) -> None:
         vacancy_list = self.query_one(SelectionList)
         vacancy_list.clear_options()
+        header = self.query_one("#vacancy_list_header", Static)
+        header.update(
+            self._build_row_text(
+                index="№",
+                title="Название вакансии",
+                company="Компания",
+                previous="Откликался сюда",
+                index_style="bold",
+                title_style="bold",
+                company_style="bold",
+                previous_style="bold",
+            )
+        )
 
         if not self.vacancies:
             vacancy_list.add_option(Selection("Вакансии не найдены.", "__none__", disabled=True))
@@ -214,21 +266,9 @@ class VacancyListScreen(Screen):
         config = load_profile_config(profile_name)
         history = get_full_negotiation_history_for_profile(profile_name)
 
-        delivered_ids, delivered_keys = _collect_delivered(history)
+        delivered_ids, delivered_keys, delivered_employers = _collect_delivered(history)
 
-        for vac in self.vacancies:
-            salary = vac.get("salary")
-            salary_plain = "не указана"
-            if salary:
-                cur = (salary.get("currency") or "").upper()
-                s_from, s_to = salary.get("from"), salary.get("to")
-                if s_from and s_to:
-                    salary_plain = f"{s_from:,}-{s_to:,} {cur}".replace(",", " ")
-                elif s_from:
-                    salary_plain = f"от {s_from:,} {cur}".replace(",", " ")
-                elif s_to:
-                    salary_plain = f"до {s_to:,} {cur}".replace(",", " ")
-
+        for idx, vac in enumerate(self.vacancies, start=1):
             raw_name = vac["name"]
             strike = False
 
@@ -236,16 +276,28 @@ class VacancyListScreen(Screen):
                 strike = True
 
             if not strike and config.get("strikethrough_applied_vac_name"):
-                key = f"{_normalize(vac['name'])}|{_normalize(vac['employer']['name'])}"
+                employer_data = vac.get("employer") or {}
+                key = f"{_normalize(vac['name'])}|{_normalize(employer_data.get('name'))}"
                 if key in delivered_keys:
                     strike = True
 
-            title_segment = self._format_segment(raw_name, 40, strike=strike)
-            company_segment = self._format_segment(vac["employer"].get("name"), 24, style="dim")
-            salary_segment = self._format_segment(salary_plain, 18, style="cyan")
+            employer_name = (vac.get("employer") or {}).get("name") or "-"
+            normalized_employer = _normalize(employer_name)
+            previous_company = bool(normalized_employer and normalized_employer in delivered_employers)
+            previous_label = "да" if previous_company else "нет"
+            previous_style = "green" if previous_company else "dim"
 
-            prompt = Text.assemble(title_segment, Text("  "), company_segment, Text("  "), salary_segment)
-            vacancy_list.add_option(Selection(prompt, vac["id"]))
+            row_text = self._build_row_text(
+                index=f"#{idx}",
+                title=raw_name,
+                company=employer_name,
+                previous=previous_label,
+                strike=strike,
+                index_style="bold",
+                previous_style=previous_style,
+            )
+
+            vacancy_list.add_option(Selection(row_text, vac["id"]))
 
         vacancy_list.highlighted = 0 if vacancy_list.option_count else None
         vacancy_list.focus()

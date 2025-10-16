@@ -189,12 +189,76 @@ SelectionList:focus {
 }
 
 Select {
+    background: transparent;
     padding: 0;
+}
+
+SelectCurrent {
+    background: $background2;
+    color: $foreground3;
+    border: solid $background3;
+    padding: 0 1;
+}
+
+SelectCurrent Static#label {
+    color: $foreground2;
+    background: transparent;
+}
+
+SelectCurrent.-has-value Static#label {
+    color: $foreground3;
+}
+
+SelectCurrent .arrow {
+    color: $foreground2;
+    background: transparent;
+}
+
+Select:focus > SelectCurrent {
+    border: solid $primary;
+}
+
+Select > SelectOverlay {
+    width: 1fr;
+}
+
+SelectOverlay {
+    background: $background2;
+    color: $foreground3;
+    border: solid $background3;
+    padding: 0 1;
+}
+
+SelectOverlay:focus {
+    border: solid $primary;
+}
+
+SelectOverlay > .option-list--option {
+    background: transparent;
+    color: $foreground3;
+}
+
+SelectOverlay > .option-list--option-highlighted,
+SelectOverlay > .option-list--option-hover,
+SelectOverlay:focus > .option-list--option-highlighted,
+SelectOverlay > .option-list--option-hover-highlighted {
+    background: $background3 40%;
+    color: $foreground1;
+}
+
+SelectOverlay > .option-list--option-disabled,
+SelectOverlay > .option-list--option-highlighted-disabled,
+SelectOverlay > .option-list--option-hover-disabled,
+SelectOverlay > .option-list--option-hover-highlighted-disabled {
+    color: $foreground2 50%;
+    background: transparent;
 }
 
 Input,
 TextArea {
-    border: solid transparent;
+    background: $background2;
+    color: $foreground3;
+    border: solid $background3;
     padding: 0;
 }
 

@@ -254,6 +254,61 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
     background: transparent;
 }
 
+.search-select {
+    background: $background2;
+    border: solid $background3;
+    padding: 1;
+    margin: 1 0;
+}
+
+.search-select__input {
+    border: solid $background3;
+    background: $background1;
+    color: $foreground3;
+    padding: 0 1;
+}
+
+.search-select__input:focus {
+    border: solid $primary;
+}
+
+.search-select__list {
+    margin-top: 1;
+    border: solid $background3;
+    max-height: 12;
+    min-height: 6;
+    padding: 0;
+}
+
+.search-select__list > .selection-list--button,
+.search-select__list > .selection-list--button-highlighted,
+.search-select__list > .selection-list--button-selected,
+.search-select__list > .selection-list--button-selected-highlighted {
+    background: transparent;
+    text-style: none;
+}
+
+.search-select__list > .selection-list--button-highlighted,
+.search-select__list > .selection-list--button-selected {
+    background: $background3 30%;
+    color: $foreground3;
+}
+
+.search-select__list > .selection-list--button-selected-highlighted {
+    background: $primary 35%;
+    color: $foreground1;
+}
+
+.search-select__footer {
+    align: left middle;
+    padding-top: 1;
+}
+
+.search-select__info {
+    color: $foreground2;
+    width: 1fr;
+}
+
 Input,
 TextArea {
     background: $background2;

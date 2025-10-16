@@ -3,10 +3,30 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll, Horizontal
 from textual.screen import Screen
 from textual.widgets import (
-    Button, Footer, Header, Input, Label, Static, Switch, TextArea, Select
+    Button,
+    Footer,
+    Header,
+    Input,
+    Label,
+    Static,
+    Switch,
+    TextArea,
+    Select,
 )
 
-from ..database import load_profile_config, save_profile_config
+from ..database import (
+    list_areas,
+    list_professional_roles,
+    load_profile_config,
+    log_to_db,
+    save_profile_config,
+)
+from ..reference_data import ensure_reference_data
+from .widgets.search_select import (
+    AreaSelect,
+    ProfessionalRoleMultiSelect,
+    SearchOption,
+)
 
 
 class ConfigScreen(Screen):
@@ -35,11 +55,11 @@ class ConfigScreen(Screen):
                 yield Label("Формат работы:")
                 yield Select([], id="work_format")
 
-                yield Label("ID Города (пока вводится вручную):")
-                yield Input(id="area_id", placeholder="113 (Россия), 1 (Москва)")
+                yield Label("Регион / город поиска:")
+                yield AreaSelect(id="area_select")
 
-                yield Label("ID Проф. ролей (через запятую, пока вручную):")
-                yield Input(id="role_ids_config", placeholder="96, 104, 107")
+                yield Label("Профессиональные роли (можно выбрать несколько):")
+                yield ProfessionalRoleMultiSelect(id="role_select")
 
                 yield Label("Область поиска:")
                 yield Select(
@@ -108,10 +128,42 @@ class ConfigScreen(Screen):
         profile_name = self.app.client.profile_name
         config = load_profile_config(profile_name)
         work_formats = self.app.dictionaries.get("work_format", [])
+        areas = list_areas()
+        roles = list_professional_roles()
+        if not areas or not roles:
+            try:
+                ensure_reference_data(self.app.client)
+            except Exception as exc:
+                log_to_db("ERROR", "ConfigScreen", f"Не удалось обновить справочники: {exc}")
+                # Не критично, просто оставим списки пустыми и покажем пользователю
+                pass
+            areas = list_areas()
+            roles = list_professional_roles()
 
-        self.app.call_from_thread(self._populate_form, config, work_formats)
+        if not areas:
+            self.app.call_from_thread(
+                self.app.notify,
+                "Не удалось загрузить справочник городов.",
+                severity="warning",
+            )
+            log_to_db("WARN", "ConfigScreen", "Справочник городов недоступен")
+        if not roles:
+            self.app.call_from_thread(
+                self.app.notify,
+                "Не удалось загрузить справочник профессиональных ролей.",
+                severity="warning",
+            )
+            log_to_db("WARN", "ConfigScreen", "Справочник профессиональных ролей недоступен")
 
-    def _populate_form(self, config: dict, work_formats: list) -> None:
+        self.app.call_from_thread(self._populate_form, config, work_formats, areas, roles)
+
+    def _populate_form(
+        self,
+        config: dict,
+        work_formats: list,
+        areas: list[dict],
+        roles: list[dict],
+    ) -> None:
         """
         Эта часть выполняется в основном потоке, обновляет виджеты.
         """
@@ -122,8 +174,6 @@ class ConfigScreen(Screen):
         self.query_one("#text_include", Input).value = ", ".join(config.get("text_include", []))
         self.query_one("#negative", Input).value = ", ".join(config.get("negative", []))
         self.query_one("#work_format", Select).value = config.get("work_format")
-        self.query_one("#area_id", Input).value = config.get("area_id", "")
-        self.query_one("#role_ids_config", Input).value = ", ".join(config.get("role_ids_config", []))
         self.query_one("#search_field", Select).value = config.get("search_field")
         self.query_one("#period", Input).value = config.get("period", "")
         self.query_one("#cover_letter", TextArea).load_text(config.get("cover_letter", ""))
@@ -131,6 +181,34 @@ class ConfigScreen(Screen):
         self.query_one("#deduplicate_by_name_and_company", Switch).value = config.get("deduplicate_by_name_and_company", True)
         self.query_one("#strikethrough_applied_vac", Switch).value = config.get("strikethrough_applied_vac", True)
         self.query_one("#strikethrough_applied_vac_name", Switch).value = config.get("strikethrough_applied_vac_name", True)
+
+        area_widget = self.query_one("#area_select", AreaSelect)
+        area_widget.set_options(
+            [
+                SearchOption(
+                    id=area["id"],
+                    prompt=f"{area['full_name']} [dim]({area['id']})[/]",
+                    label=area["full_name"],
+                    search_text=area["search_name"],
+                )
+                for area in areas
+            ]
+        )
+        area_widget.set_value(config.get("area_id"))
+
+        roles_widget = self.query_one("#role_select", ProfessionalRoleMultiSelect)
+        roles_widget.set_options(
+            [
+                SearchOption(
+                    id=role["id"],
+                    prompt=f"{role['category_name']} — {role['name']} [dim]({role['id']})[/]",
+                    label=f"{role['category_name']} — {role['name']}",
+                    search_text=role["search_name"],
+                )
+                for role in roles
+            ]
+        )
+        roles_widget.set_value(config.get("role_ids_config", []))
 
         theme_select = self.query_one("#theme", Select)
         themes = sorted(self.app.css_manager.themes.values(), key=lambda t: t._name)
@@ -157,12 +235,15 @@ class ConfigScreen(Screen):
             """Безопасно парсит строку с запятыми в список строк."""
             return [item.strip() for item in text.split(",") if item.strip()]
 
+        area_widget = self.query_one("#area_select", AreaSelect)
+        roles_widget = self.query_one("#role_select", ProfessionalRoleMultiSelect)
+
         config = {
             "text_include": parse_list(self.query_one("#text_include", Input).value),
             "negative": parse_list(self.query_one("#negative", Input).value),
-            "role_ids_config": parse_list(self.query_one("#role_ids_config", Input).value),
+            "role_ids_config": roles_widget.values,
             "work_format": self.query_one("#work_format", Select).value,
-            "area_id": self.query_one("#area_id", Input).value,
+            "area_id": area_widget.value or "",
             "search_field": self.query_one("#search_field", Select).value,
             "period": self.query_one("#period", Input).value,
             "cover_letter": self.query_one("#cover_letter", TextArea).text,

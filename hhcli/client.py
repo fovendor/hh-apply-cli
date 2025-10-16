@@ -182,6 +182,16 @@ class HHApiClient:
         log_to_db("INFO", "APIClient", "Запрос общих справочников...")
         return self._request("GET", "/dictionaries")
 
+    def get_areas(self):
+        """Возвращает полный список регионов hh.ru."""
+        log_to_db("INFO", "APIClient", "Запрос справочника регионов...")
+        return self._request("GET", "/areas")
+
+    def get_professional_roles(self):
+        """Возвращает справочник профессиональных ролей hh.ru."""
+        log_to_db("INFO", "APIClient", "Запрос справочника профессиональных ролей...")
+        return self._request("GET", "/professional_roles")
+
     def sync_negotiation_history(self):
         log_to_db("INFO", "SyncEngine", f"Запуск синхронизации истории откликов для профиля '{self.profile_name}'.")
         last_sync = get_last_sync_timestamp(self.profile_name)

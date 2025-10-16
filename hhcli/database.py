@@ -1,7 +1,7 @@
 import os
 import json
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Iterable, Sequence
 
 from platformdirs import user_data_dir
 from sqlalchemy import (
@@ -170,6 +170,30 @@ dictionaries_cache = Table(
     Column("cached_at", DateTime, nullable=False)
 )
 
+areas = Table(
+    "areas", metadata,
+    Column("id", String, primary_key=True),
+    Column("parent_id", String, nullable=True, index=True),
+    Column("name", String, nullable=False),
+    Column("full_name", String, nullable=False),
+    Column("search_name", String, nullable=False, index=True),
+    Column("level", Integer, nullable=False, default=0),
+    Column("sort_order", Integer, nullable=False, default=0),
+)
+
+professional_roles_catalog = Table(
+    "professional_roles", metadata,
+    Column("id", String, primary_key=True),
+    Column("name", String, nullable=False),
+    Column("full_name", String, nullable=False),
+    Column("search_name", String, nullable=False, index=True),
+    Column("category_id", String, nullable=False, index=True),
+    Column("category_name", String, nullable=False),
+    Column("category_order", Integer, nullable=False, default=0),
+    Column("role_order", Integer, nullable=False, default=0),
+    Column("sort_order", Integer, nullable=False, default=0),
+)
+
 def save_vacancy_to_cache(vacancy_id: str, vacancy_data: dict):
     """Сохраняет JSON-данные вакансии в кэш в виде текста."""
     if not engine:
@@ -253,6 +277,168 @@ def get_vacancy_from_cache(vacancy_id: str) -> dict | None:
             return json.loads(result)
         return None
 
+
+def _upsert_app_state(connection, key: str, value: str) -> None:
+    stmt = sqlite_insert(app_state).values(key=key, value=value)
+    stmt = stmt.on_conflict_do_update(index_elements=["key"], set_=dict(value=value))
+    connection.execute(stmt)
+
+
+def get_app_state_value(key: str) -> str | None:
+    """Возвращает значение из таблицы состояния приложения."""
+    if not engine:
+        return None
+    with engine.connect() as connection:
+        stmt = select(app_state.c.value).where(app_state.c.key == key)
+        return connection.execute(stmt).scalar_one_or_none()
+
+
+def set_app_state_value(key: str, value: str) -> None:
+    """Сохраняет ключ-значение в таблицу состояния приложения."""
+    if not engine:
+        return
+    with engine.begin() as connection:
+        _upsert_app_state(connection, key, value)
+
+
+def replace_areas(records: Sequence[dict[str, Any]], *, data_hash: str) -> None:
+    """Полностью заменяет таблицу регионов на переданные данные."""
+    if not engine:
+        return
+    prepared = [
+        {
+            "id": str(item["id"]),
+            "parent_id": str(item["parent_id"]) if item.get("parent_id") else None,
+            "name": item["name"],
+            "full_name": item["full_name"],
+            "search_name": item["search_name"],
+            "level": int(item.get("level", 0)),
+            "sort_order": int(item.get("sort_order", index)),
+        }
+        for index, item in enumerate(records)
+    ]
+    with engine.begin() as connection:
+        connection.execute(areas.delete())
+        if prepared:
+            connection.execute(areas.insert(), prepared)
+        timestamp = datetime.now().isoformat()
+        _upsert_app_state(connection, "areas_hash", data_hash)
+        _upsert_app_state(connection, "areas_updated_at", timestamp)
+
+
+def replace_professional_roles(records: Sequence[dict[str, Any]], *, data_hash: str) -> None:
+    """Полностью заменяет таблицу профессиональных ролей на переданные данные."""
+    if not engine:
+        return
+    prepared: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    duplicate_count = 0
+    for item in records:
+        rid = str(item["id"])
+        if rid in seen_ids:
+            duplicate_count += 1
+            continue
+        seen_ids.add(rid)
+        prepared.append(
+            {
+                "id": rid,
+                "name": item["name"],
+                "full_name": item["full_name"],
+                "search_name": item["search_name"],
+                "category_id": str(item["category_id"]),
+                "category_name": item["category_name"],
+                "category_order": int(item.get("category_order", 0)),
+                "role_order": int(item.get("role_order", 0)),
+                "sort_order": len(prepared),
+            }
+        )
+    with engine.begin() as connection:
+        connection.execute(professional_roles_catalog.delete())
+        if prepared:
+            connection.execute(professional_roles_catalog.insert(), prepared)
+        timestamp = datetime.now().isoformat()
+        _upsert_app_state(connection, "professional_roles_hash", data_hash)
+        _upsert_app_state(connection, "professional_roles_updated_at", timestamp)
+    if duplicate_count:
+        log_to_db(
+            "WARN",
+            "ReferenceData",
+            f"Получено дубликатов профессиональных ролей: {duplicate_count}",
+        )
+
+
+def list_areas() -> list[dict[str, Any]]:
+    """Возвращает список всех регионов в порядке сортировки."""
+    if not engine:
+        return []
+    with engine.connect() as connection:
+        stmt = (
+            select(
+                areas.c.id,
+                areas.c.parent_id,
+                areas.c.name,
+                areas.c.full_name,
+                areas.c.search_name,
+                areas.c.level,
+                areas.c.sort_order,
+            )
+            .order_by(areas.c.sort_order)
+        )
+        rows = connection.execute(stmt).fetchall()
+        return [dict(row._mapping) for row in rows]
+
+
+def list_professional_roles() -> list[dict[str, Any]]:
+    """Возвращает все профессиональные роли в порядке категорий и ролей."""
+    if not engine:
+        return []
+    with engine.connect() as connection:
+        stmt = (
+            select(
+                professional_roles_catalog.c.id,
+                professional_roles_catalog.c.name,
+                professional_roles_catalog.c.full_name,
+                professional_roles_catalog.c.search_name,
+                professional_roles_catalog.c.category_id,
+                professional_roles_catalog.c.category_name,
+                professional_roles_catalog.c.category_order,
+                professional_roles_catalog.c.role_order,
+                professional_roles_catalog.c.sort_order,
+            )
+            .order_by(
+                professional_roles_catalog.c.category_order,
+                professional_roles_catalog.c.role_order,
+            )
+        )
+        rows = connection.execute(stmt).fetchall()
+        return [dict(row._mapping) for row in rows]
+
+
+def get_area_full_name(area_id: str) -> str | None:
+    """Возвращает полное название региона по ID."""
+    if not engine:
+        return None
+    with engine.connect() as connection:
+        stmt = select(areas.c.full_name).where(areas.c.id == str(area_id))
+        return connection.execute(stmt).scalar_one_or_none()
+
+
+def get_professional_roles_by_ids(role_ids: Sequence[str]) -> list[dict[str, Any]]:
+    """Возвращает данные по списку ID профессиональных ролей, сохраняя порядок входных данных."""
+    if not engine or not role_ids:
+        return []
+    normalized_ids = [str(rid) for rid in role_ids]
+    with engine.connect() as connection:
+        stmt = select(
+            professional_roles_catalog.c.id,
+            professional_roles_catalog.c.name,
+            professional_roles_catalog.c.full_name,
+            professional_roles_catalog.c.category_name,
+        ).where(professional_roles_catalog.c.id.in_(normalized_ids))
+        rows = connection.execute(stmt).fetchall()
+        mapped = {row._mapping["id"]: dict(row._mapping) for row in rows}
+    return [mapped[rid] for rid in normalized_ids if rid in mapped]
+
 def init_db():
     global engine
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -319,24 +505,16 @@ def get_full_negotiation_history_for_profile(profile_name: str) -> list[dict]:
 
 
 def get_last_sync_timestamp(profile_name: str) -> datetime | None:
-    with engine.connect() as connection:
-        key = f"last_negotiation_sync_{profile_name}"
-        stmt = select(app_state.c.value).where(app_state.c.key == key)
-        result = connection.execute(stmt).scalar_one_or_none()
-        if result:
-            return datetime.fromisoformat(result)
-        return None
+    key = f"last_negotiation_sync_{profile_name}"
+    value = get_app_state_value(key)
+    if value:
+        return datetime.fromisoformat(value)
+    return None
 
 
 def set_last_sync_timestamp(profile_name: str, timestamp: datetime):
-    with engine.connect() as connection:
-        key = f"last_negotiation_sync_{profile_name}"
-        value = timestamp.isoformat()
-        stmt = sqlite_insert(app_state).values(key=key, value=value)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=['key'], set_=dict(value=value))
-        connection.execute(stmt)
-        connection.commit()
+    key = f"last_negotiation_sync_{profile_name}"
+    set_app_state_value(key, timestamp.isoformat())
 
 
 def upsert_negotiation_history(negotiations: list[dict], profile_name: str):

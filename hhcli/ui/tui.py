@@ -35,6 +35,7 @@ from ..database import (
     get_dictionary_from_cache,
     save_dictionary_to_cache,
 )
+from ..reference_data import ensure_reference_data
 
 from .config_screen import ConfigScreen
 from .css_manager import CssManager
@@ -249,7 +250,7 @@ class VacancyListScreen(Screen):
                 index="№",
                 title="Название вакансии",
                 company="Компания",
-                previous="Откликался сюда",
+                previous="Откликался",
                 index_style="bold",
                 title_style="bold",
                 company_style="bold",
@@ -686,6 +687,17 @@ class HHCliApp(App):
             except Exception as e:
                 log_to_db("ERROR", "TUI", f"Не удалось загрузить справочники: {e}")
                 self.app.notify("Ошибка загрузки справочников!", severity="error")
+                return
+
+        # Обновляем справочники регионов и профессиональных ролей
+        try:
+            updates = ensure_reference_data(self.client)
+            if updates.get("areas"):
+                log_to_db("INFO", "TUI", "Справочник регионов обновлён.")
+            if updates.get("professional_roles"):
+                log_to_db("INFO", "TUI", "Справочник профессиональных ролей обновлён.")
+        except Exception as exc:
+            log_to_db("ERROR", "TUI", f"Не удалось обновить справочники регионов/ролей: {exc}")
 
     def action_quit(self) -> None:
         log_to_db("INFO", "TUI", "Пользователь запросил выход.")

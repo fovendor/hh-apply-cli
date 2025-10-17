@@ -9,6 +9,7 @@ from textual.containers import Center, Horizontal, Vertical, VerticalScroll
 from textual.events import Key
 from textual.screen import Screen
 from textual.timer import Timer
+from textual.message import Message
 from textual.widgets import (
     DataTable,
     Footer,
@@ -18,6 +19,7 @@ from textual.widgets import (
     Markdown,
     SelectionList,
     Static,
+    Button,
 )
 from textual.widgets._option_list import OptionList
 from textual.widgets._selection_list import Selection
@@ -55,6 +57,75 @@ ERROR_REASON_MAP = {
     "unknown_api_error": "Неизвестная ошибка API",
     "network_error": "Ошибка сети",
 }
+
+
+class PaginationControls(Horizontal):
+    """Виджет для отображения элементов управления пагинацией."""
+
+    class PageChanged(Message):
+        """Сообщение о смене страницы."""
+        def __init__(self, page: int) -> None:
+            super().__init__()
+            self.page = page
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.current_page = 0
+        self.total_pages = 1
+        self.styles.height = "auto"
+        self.styles.align = ("center", "middle")
+        self.styles.padding = (1, 0, 0, 0)
+
+    def update_pages(self, current: int, total: int) -> None:
+        """Обновляет и перерисовывает элементы управления."""
+        self.current_page = current
+        self.total_pages = total
+        self.remove_children()
+
+        if self.total_pages <= 1:
+            return
+
+        buttons = []
+        buttons.append(Button("<<", id="first", disabled=current == 0))
+        buttons.append(Button("<", id="prev", disabled=current == 0))
+        page_numbers = set()
+        page_numbers.add(0)
+        page_numbers.add(total - 1)
+        for i in range(max(0, current - 2), min(total, current + 3)):
+            page_numbers.add(i)
+
+        last_page = -1
+        for page in sorted(list(page_numbers)):
+            if page > last_page + 1:
+                buttons.append(Static("...", classes="pagination-ellipsis"))
+            is_current = page == current
+            buttons.append(
+                Button(
+                    str(page + 1),
+                    id=f"page_{page}",
+                    variant="primary" if is_current else "default",
+                    disabled=is_current,
+                )
+            )
+            last_page = page
+
+        buttons.append(Button(">", id="next", disabled=current >= total - 1))
+        buttons.append(Button(">>", id="last", disabled=current >= total - 1))
+
+        self.mount_all(buttons)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        actions = {
+            "first": 0, "last": self.total_pages - 1,
+            "prev": self.current_page - 1, "next": self.current_page + 1,
+        }
+        target_page = actions.get(event.button.id)
+        if target_page is None and event.button.id.startswith("page_"):
+            target_page = int(event.button.id.split("_")[1])
+
+        if target_page is not None and 0 <= target_page < self.total_pages:
+            self.post_message(self.PageChanged(page=target_page))
 
 
 class VacancySelectionList(SelectionList[str]):
@@ -191,6 +262,8 @@ class VacancyListScreen(Screen):
         Binding("escape", "app.pop_screen", "Назад"),
         Binding("c", "edit_config", "Настройки", show=True),
         Binding("с", "edit_config", "Настройки (RU)", show=False),
+        Binding("left", "prev_page", "Предыдущая страница", show=False),
+        Binding("right", "next_page", "Следующая страница", show=False),
     ]
     _debounce_timer: Optional[Timer] = None
 
@@ -199,13 +272,20 @@ class VacancyListScreen(Screen):
     COMPANY_WIDTH = 24
     PREVIOUS_WIDTH = 8
 
-    def __init__(self, vacancies: list[dict], resume_id: str) -> None:
+    def __init__(
+        self, resume_id: str, search_mode: str,
+        config_snapshot: Optional[dict] = None
+    ) -> None:
         super().__init__()
-        self.vacancies = vacancies
+        self.vacancies: list[dict] = []
+        self.vacancies_by_id: dict[str, dict] = {}
         self.resume_id = resume_id
         self.selected_vacancies: set[str] = set()
-        self.vacancies_by_id = {v["id"]: v for v in vacancies}
         self._pending_details_id: Optional[str] = None
+        self.current_page = 0
+        self.total_pages = 1
+        self.search_mode = search_mode
+        self.config_snapshot = config_snapshot or {}
 
         self.html_converter = html2text.HTML2Text()
         self.html_converter.body_width = 0
@@ -293,6 +373,7 @@ class VacancyListScreen(Screen):
                     vacancy_panel.styles.border_title_align = "left"
                     yield Static(id="vacancy_list_header")
                     yield VacancySelectionList(id="vacancy_list")
+                    yield PaginationControls(id="pagination")
                 with Vertical(
                         id="details_panel", classes="pane"
                 ) as details_panel:
@@ -321,6 +402,47 @@ class VacancyListScreen(Screen):
                 previous_style="bold",
             )
         )
+        self._fetch_and_refresh_vacancies(page=0)
+
+    def _fetch_and_refresh_vacancies(self, page: int) -> None:
+        """Запускает воркер для загрузки вакансий и обновления UI."""
+        self.current_page = page
+        self.query_one(LoadingIndicator).display = True
+        self.query_one(VacancySelectionList).clear_options()
+        self.query_one(VacancySelectionList).add_option(
+            Selection("Загрузка вакансий...", "__none__", disabled=True)
+        )
+        self.run_worker(
+            self._fetch_worker(page), exclusive=True, thread=True
+        )
+
+    async def _fetch_worker(self, page: int) -> None:
+        """Воркер, выполняющий API-запрос."""
+        try:
+            if self.search_mode == "auto":
+                result = self.app.client.get_similar_vacancies(
+                    self.resume_id, page=page
+                )
+            else:
+                result = self.app.client.search_vacancies(
+                    self.config_snapshot, page=page
+                )
+            items = (result or {}).get("items", [])
+            pages = (result or {}).get("pages", 1)
+            self.app.call_from_thread(self._on_vacancies_loaded, items, pages)
+        except Exception as e:
+            log_to_db("ERROR", "VacancyListFetch", f"Ошибка загрузки: {e}")
+            self.app.notify(f"Ошибка загрузки: {e}", severity="error")
+
+    def _on_vacancies_loaded(self, items: list, pages: int) -> None:
+        """Обработчик успешной загрузки данных."""
+        self.vacancies = items
+        self.vacancies_by_id = {v["id"]: v for v in items}
+        self.total_pages = pages
+
+        pagination = self.query_one(PaginationControls)
+        pagination.update_pages(self.current_page, self.total_pages)
+
         self._refresh_vacancy_list()
         self.query_one(LoadingIndicator).display = False
 
@@ -590,6 +712,22 @@ class VacancyListScreen(Screen):
 
         self.app.call_from_thread(finalize)
 
+    def action_prev_page(self) -> None:
+        """Переключиться на предыдущую страницу."""
+        if self.current_page > 0:
+            self._fetch_and_refresh_vacancies(self.current_page - 1)
+
+    def action_next_page(self) -> None:
+        """Переключиться на следующую страницу."""
+        if self.current_page < self.total_pages - 1:
+            self._fetch_and_refresh_vacancies(self.current_page + 1)
+
+    def on_pagination_controls_page_changed(
+        self, message: PaginationControls.PageChanged
+    ) -> None:
+        """Обработчик нажатия на кнопку пагинации."""
+        self._fetch_and_refresh_vacancies(message.page)
+
 
 class ResumeSelectionScreen(Screen):
     """Выбор резюме."""
@@ -682,35 +820,21 @@ class SearchModeScreen(Screen):
         """Открыть экран редактирования конфигурации."""
         self.app.push_screen(ConfigScreen())
 
-    async def action_run_search(self, mode: str) -> None:
+    def action_run_search(self, mode: str) -> None:
         log_to_db("INFO", "SearchModeScreen", f"Выбран режим '{mode}'")
-        self.app.notify("Идёт поиск вакансий...", title="Загрузка", timeout=2)
-        try:
-            if mode == "auto":
-                result = self.app.client.get_similar_vacancies(self.resume_id)
-            else:
-                cfg = load_profile_config(self.app.client.profile_name)
-                result = self.app.client.search_vacancies(cfg)
-        except Exception as exc:
-            log_to_db("ERROR", "SearchModeScreen", f"Ошибка API: {exc}")
-            self.app.notify(
-                f"Ошибка API: {exc}",
-                title="Ошибка", severity="error", timeout=2
-            )
-            return
-
-        items = (result or {}).get("items") or []
-        if items:
-            log_to_db("INFO", "SearchModeScreen",
-                      f"Найдено {len(items)} вакансий")
+        if mode == "auto":
             self.app.push_screen(
-                VacancyListScreen(vacancies=items, resume_id=self.resume_id)
+                VacancyListScreen(
+                    resume_id=self.resume_id, search_mode="auto"
+                )
             )
         else:
-            log_to_db("WARN", "SearchModeScreen", "Пустой результат")
-            self.app.notify(
-                "По вашему запросу ничего не найдено.",
-                title="Результат поиска", severity="warning"
+            cfg = load_profile_config(self.app.client.profile_name)
+            self.app.push_screen(
+                VacancyListScreen(
+                    resume_id=self.resume_id, search_mode="manual",
+                    config_snapshot=cfg
+                )
             )
 
 

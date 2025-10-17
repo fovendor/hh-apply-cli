@@ -186,9 +186,11 @@ class HHApiClient:
             self, resume_id: str, page: int = 0, per_page: int = 50
     ):
         params = {"page": page, "per_page": per_page}
-        return self._request(
+        data = self._request(
             "GET", f"/resumes/{resume_id}/similar_vacancies", params=params
         )
+        data.setdefault("pages", data.get("found", 0) // per_page + 1)
+        return data
 
     def search_vacancies(
             self, config: dict, page: int = 0, per_page: int = 50

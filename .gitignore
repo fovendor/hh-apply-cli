@@ -8,3 +8,6 @@
 .mypy_cache/
 .ruff_cache/
 *.cache/
+
+# Кэш приложения
+/cache-dir/

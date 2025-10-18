@@ -365,33 +365,31 @@ Switch:focus {
     border: solid $primary;
 }
 
-/* Пагинация */
-#pagination {
-    align: center middle;
+/* --- Стили для пагинации --- */
+Pagination {
+    width: 100%;
     height: auto;
+    align: center middle;
     padding-top: 1;
 }
 
-#pagination > Button {
+Pagination > Button {
     min-width: 3;
     width: auto;
     height: 1;
     border: none;
     padding: 0 1;
+    margin: 0 1;
     background: $background3;
 }
 
-#pagination > Button:hover {
-    background: $secondary 60%;
+Pagination > Button:hover {
+    background: $background3;
 }
 
-#pagination > Button.-primary,
-#pagination > Button.-primary:hover {
+Pagination > Button.-primary,
+Pagination > Button.-primary:hover {
     background: $primary;
     color: $background1;
     text-style: bold;
-}
-
-#pagination > .pagination-ellipsis {
-    padding: 0 1;
 }

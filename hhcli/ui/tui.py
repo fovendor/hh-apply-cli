@@ -41,6 +41,7 @@ from ..reference_data import ensure_reference_data
 
 from .config_screen import ConfigScreen
 from .css_manager import CssManager
+from .widgets import Pagination
 
 CSS_MANAGER = CssManager()
 
@@ -57,75 +58,6 @@ ERROR_REASON_MAP = {
     "unknown_api_error": "Неизвестная ошибка API",
     "network_error": "Ошибка сети",
 }
-
-
-class PaginationControls(Horizontal):
-    """Виджет для отображения элементов управления пагинацией."""
-
-    class PageChanged(Message):
-        """Сообщение о смене страницы."""
-        def __init__(self, page: int) -> None:
-            super().__init__()
-            self.page = page
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.current_page = 0
-        self.total_pages = 1
-        self.styles.height = "auto"
-        self.styles.align = ("center", "middle")
-        self.styles.padding = (1, 0, 0, 0)
-
-    def update_pages(self, current: int, total: int) -> None:
-        """Обновляет и перерисовывает элементы управления."""
-        self.current_page = current
-        self.total_pages = total
-        self.remove_children()
-
-        if self.total_pages <= 1:
-            return
-
-        buttons = []
-        buttons.append(Button("<<", id="first", disabled=current == 0))
-        buttons.append(Button("<", id="prev", disabled=current == 0))
-        page_numbers = set()
-        page_numbers.add(0)
-        page_numbers.add(total - 1)
-        for i in range(max(0, current - 2), min(total, current + 3)):
-            page_numbers.add(i)
-
-        last_page = -1
-        for page in sorted(list(page_numbers)):
-            if page > last_page + 1:
-                buttons.append(Static("...", classes="pagination-ellipsis"))
-            is_current = page == current
-            buttons.append(
-                Button(
-                    str(page + 1),
-                    id=f"page_{page}",
-                    variant="primary" if is_current else "default",
-                    disabled=is_current,
-                )
-            )
-            last_page = page
-
-        buttons.append(Button(">", id="next", disabled=current >= total - 1))
-        buttons.append(Button(">>", id="last", disabled=current >= total - 1))
-
-        self.mount_all(buttons)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        event.stop()
-        actions = {
-            "first": 0, "last": self.total_pages - 1,
-            "prev": self.current_page - 1, "next": self.current_page + 1,
-        }
-        target_page = actions.get(event.button.id)
-        if target_page is None and event.button.id.startswith("page_"):
-            target_page = int(event.button.id.split("_")[1])
-
-        if target_page is not None and 0 <= target_page < self.total_pages:
-            self.post_message(self.PageChanged(page=target_page))
 
 
 class VacancySelectionList(SelectionList[str]):
@@ -271,6 +203,7 @@ class VacancyListScreen(Screen):
     TITLE_WIDTH = 40
     COMPANY_WIDTH = 24
     PREVIOUS_WIDTH = 10
+    PER_PAGE = 50  # Стандартное количество вакансий на странице от API hh.ru
 
     def __init__(
         self, resume_id: str, search_mode: str,
@@ -373,7 +306,7 @@ class VacancyListScreen(Screen):
                     vacancy_panel.styles.border_title_align = "left"
                     yield Static(id="vacancy_list_header")
                     yield VacancySelectionList(id="vacancy_list")
-                    yield PaginationControls(id="pagination")
+                    yield Pagination(id="pagination_control")
                 with Vertical(
                         id="details_panel", classes="pane"
                 ) as details_panel:
@@ -421,11 +354,11 @@ class VacancyListScreen(Screen):
         try:
             if self.search_mode == "auto":
                 result = self.app.client.get_similar_vacancies(
-                    self.resume_id, page=page
+                    self.resume_id, page=page, per_page=self.PER_PAGE
                 )
             else:
                 result = self.app.client.search_vacancies(
-                    self.config_snapshot, page=page
+                    self.config_snapshot, page=page, per_page=self.PER_PAGE
                 )
             items = (result or {}).get("items", [])
             pages = (result or {}).get("pages", 1)
@@ -440,8 +373,8 @@ class VacancyListScreen(Screen):
         self.vacancies_by_id = {v["id"]: v for v in items}
         self.total_pages = pages
 
-        pagination = self.query_one(PaginationControls)
-        pagination.update_pages(self.current_page, self.total_pages)
+        pagination = self.query_one(Pagination)
+        pagination.update_state(self.current_page, self.total_pages)
 
         self._refresh_vacancy_list()
         self.query_one(LoadingIndicator).display = False
@@ -466,7 +399,9 @@ class VacancyListScreen(Screen):
         delivered_ids, delivered_keys, delivered_employers = \
             _collect_delivered(history)
 
-        for idx, vac in enumerate(self.vacancies, start=1):
+        start_offset = self.current_page * self.PER_PAGE
+
+        for idx, vac in enumerate(self.vacancies):
             raw_name = vac["name"]
             strike = False
 
@@ -490,7 +425,7 @@ class VacancyListScreen(Screen):
             previous_style = "green" if previous_company else "dim"
 
             row_text = self._build_row_text(
-                index=f"#{idx}",
+                index=f"#{start_offset + idx + 1}",
                 title=raw_name,
                 company=employer_name,
                 previous=previous_label,
@@ -720,8 +655,8 @@ class VacancyListScreen(Screen):
         if self.current_page < self.total_pages - 1:
             self._fetch_and_refresh_vacancies(self.current_page + 1)
 
-    def on_pagination_controls_page_changed(
-        self, message: PaginationControls.PageChanged
+    def on_pagination_page_changed(
+        self, message: Pagination.PageChanged
     ) -> None:
         """Обработчик нажатия на кнопку пагинации."""
         self._fetch_and_refresh_vacancies(message.page)

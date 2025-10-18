@@ -744,8 +744,7 @@ class ResumeSelectionScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("ID резюме", "Должность", "Ссылка")
-        table.fixed_columns = 1
+        table.add_columns("Должность", "Ссылка")
         self.index_to_resume_id.clear()
 
         items = self.resume_data.get("items", [])
@@ -754,10 +753,8 @@ class ResumeSelectionScreen(Screen):
             return
 
         for r in items:
-            table.add_row(
-                r.get("id"), f"[bold green]{r.get('title')}[/bold green]",
-                r.get("alternate_url")
-            )
+            table.add_row(f"[bold green]{r.get('title')}[/bold green]",
+                          r.get("alternate_url"))
             self.index_to_resume_id.append(r.get("id"))
 
     def on_data_table_row_selected(self, _: DataTable.RowSelected) -> None:

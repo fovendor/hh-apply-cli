@@ -270,7 +270,7 @@ class VacancyListScreen(Screen):
     ID_WIDTH = 5
     TITLE_WIDTH = 40
     COMPANY_WIDTH = 24
-    PREVIOUS_WIDTH = 8
+    PREVIOUS_WIDTH = 10
 
     def __init__(
         self, resume_id: str, search_mode: str,
@@ -576,14 +576,13 @@ class VacancyListScreen(Screen):
         if self._pending_details_id != vacancy_id:
             return
 
-        salary_line = ""
+        salary_line = f"**Зарплата:** N/A\n\n"
         salary_data = details.get("salary")
         if salary_data:
             s_from = salary_data.get("from")
             s_to = salary_data.get("to")
             currency = (salary_data.get("currency") or "").upper()
-            gross_str = (" (до вычета налогов)"
-                         if salary_data.get("gross") else "")
+            gross_str = " (до вычета налогов)" if salary_data.get("gross") else ""
 
             parts = []
             if s_from:
@@ -593,8 +592,7 @@ class VacancyListScreen(Screen):
 
             if parts:
                 salary_str = " ".join(parts)
-                salary_line = (f"**Зарплата:** {salary_str} "
-                               f"{currency}{gross_str}\n")
+                salary_line = (f"**Зарплата:** {salary_str} {currency}{gross_str}\n\n")
 
         desc_html = details.get("description", "")
         desc_md = self.html_converter.handle(html.unescape(desc_html)).strip()
@@ -605,9 +603,9 @@ class VacancyListScreen(Screen):
 
         doc = (
             f"## {details['name']}\n\n"
-            f"{salary_line}\n"
             f"**Компания:** {details['employer']['name']}\n\n"
             f"**Ссылка:** {details['alternate_url']}\n\n"
+            f"{salary_line}"
             f"**Ключевые навыки:**\n{skills_text}\n\n"
             f"**Описание:**\n\n{desc_md}\n"
         )

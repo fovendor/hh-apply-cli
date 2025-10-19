@@ -364,7 +364,6 @@ class ConfigScreen(Screen):
                 ensure_reference_data(self.app.client)
             except Exception as exc:
                 log_to_db("ERROR", "ConfigScreen", f"Не удалось обновить справочники: {exc}")
-                # Не критично, просто оставим списки пустыми и покажем пользователю
                 pass
             areas = list_areas()
             roles = list_professional_roles()

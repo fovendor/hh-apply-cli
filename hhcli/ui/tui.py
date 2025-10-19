@@ -189,9 +189,9 @@ class VacancyListScreen(Screen):
     """Список вакансий + детали справа."""
 
     BINDINGS = [
+        Binding("escape", "app.pop_screen", "Назад"),
         Binding("x", "toggle_select", "Выбрать", show=True),
         Binding("a", "apply_for_selected", "Откликнуться"),
-        Binding("escape", "app.pop_screen", "Назад"),
         Binding("c", "edit_config", "Настройки", show=True),
         Binding("с", "edit_config", "Настройки (RU)", show=False),
         Binding("left", "prev_page", "Предыдущая страница", show=False),
@@ -203,7 +203,7 @@ class VacancyListScreen(Screen):
     TITLE_WIDTH = 40
     COMPANY_WIDTH = 24
     PREVIOUS_WIDTH = 10
-    PER_PAGE = 50  # Стандартное количество вакансий на странице от API hh.ru
+    PER_PAGE = 50
 
     def __init__(
         self, resume_id: str, search_mode: str,
@@ -306,7 +306,7 @@ class VacancyListScreen(Screen):
                     vacancy_panel.styles.border_title_align = "left"
                     yield Static(id="vacancy_list_header")
                     yield VacancySelectionList(id="vacancy_list")
-                    yield Pagination(id="pagination_control")
+                    yield Pagination()
                 with Vertical(
                         id="details_panel", classes="pane"
                 ) as details_panel:
@@ -337,6 +337,14 @@ class VacancyListScreen(Screen):
         )
         self._fetch_and_refresh_vacancies(page=0)
 
+    def on_screen_resume(self) -> None:
+        """
+        Вызывается, когда мы возвращаемся на этот экран (например, из настроек).
+        Перезагружает вакансии, чтобы применить новые настройки.
+        """
+        self.app.notify("Обновление списка вакансий...", timeout=1.5)
+        self._fetch_and_refresh_vacancies(self.current_page)
+
     def _fetch_and_refresh_vacancies(self, page: int) -> None:
         """Запускает воркер для загрузки вакансий и обновления UI."""
         self.current_page = page
@@ -352,6 +360,9 @@ class VacancyListScreen(Screen):
     async def _fetch_worker(self, page: int) -> None:
         """Воркер, выполняющий API-запрос."""
         try:
+            if self.search_mode == 'manual':
+                self.config_snapshot = load_profile_config(self.app.client.profile_name)
+
             if self.search_mode == "auto":
                 result = self.app.client.get_similar_vacancies(
                     self.resume_id, page=page, per_page=self.PER_PAGE
@@ -369,8 +380,31 @@ class VacancyListScreen(Screen):
 
     def _on_vacancies_loaded(self, items: list, pages: int) -> None:
         """Обработчик успешной загрузки данных."""
-        self.vacancies = items
-        self.vacancies_by_id = {v["id"]: v for v in items}
+        profile_name = self.app.client.profile_name
+        config = load_profile_config(profile_name)
+        
+        filtered_items = items
+        if config.get("deduplicate_by_name_and_company", True):
+            seen_keys = set()
+            unique_vacancies = []
+            for vac in items:
+                name = _normalize(vac.get("name"))
+                employer = vac.get("employer") or {}
+                emp_key = _normalize(employer.get("id") or employer.get("name"))
+                key = f"{name}|{emp_key}"
+                
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    unique_vacancies.append(vac)
+            
+            num_removed = len(items) - len(unique_vacancies)
+            if num_removed > 0:
+                self.app.notify(f"Удалено дублей: {num_removed}", title="Фильтрация")
+
+            filtered_items = unique_vacancies
+
+        self.vacancies = filtered_items
+        self.vacancies_by_id = {v["id"]: v for v in filtered_items}
         self.total_pages = pages
 
         pagination = self.query_one(Pagination)

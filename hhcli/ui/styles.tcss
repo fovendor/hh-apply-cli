@@ -1,8 +1,42 @@
-# Общие настройки
+/* --- 1. Глобальные стили и стили по-умолчанию --- */
+
+* {
+    scrollbar-size: 1 1;
+    scrollbar-background: $background3;
+    scrollbar-color: $primary;
+    scrollbar-background-hover: $background2;
+    scrollbar-color-hover: $secondary;
+    link-color: $primary;
+}
 
 Screen {
     background: $background1;
     color: $foreground2;
+}
+
+Static, Label {
+    color: $foreground3;
+}
+
+Markdown {
+    background: $background2;
+    color: $foreground3;
+    padding: 0 1;
+    border: round $background3;
+    border-title-align: left;
+}
+
+LoadingIndicator,
+.loading-indicator {
+    color: $secondary;
+}
+
+
+/* --- 2. Основная структура приложения --- */
+
+#vacancy_screen,
+#config_screen {
+    height: 100%;
 }
 
 Footer {
@@ -36,52 +70,8 @@ Footer > .footer--highlight-key {
     text-style: bold;
 }
 
-#vacancy_list_header {
-    background: transparent;
-    color: $foreground2;
-    padding: 0 0 0 4;
-    text-style: bold;
-}
 
-Static, Label {
-    color: $foreground3;
-}
-
-Markdown {
-    background: $background2;
-    color: $foreground3;
-    padding: 0 1;
-    border: round $background3;
-    border-title-align: left;
-}
-
-.loading-indicator {
-    color: $secondary;
-}
-
-# Панели и таблицы
-
-DataTable {
-    background: transparent;
-    color: $foreground3;
-    border: none;
-    scrollbar-color: $primary;
-    scrollbar-background: $background3 60%;
-}
-
-DataTable:focus {
-    border: none;
-}
-
-DataTable > .datatable--header {
-    background: $background3;
-    color: $foreground1;
-}
-
-#vacancy_screen,
-#config_screen {
-    height: 100%;
-}
+/* --- 3. Экран просмотра вакансий --- */
 
 .pane {
     background: $background2;
@@ -94,17 +84,17 @@ DataTable > .datatable--header {
     height: 1fr;
 }
 
+#vacancy_layout {
+    height: 1fr;
+    padding: 0;
+}
+
 #vacancy_panel {
     margin-left: 0;
 }
 
 #details_panel {
     padding: 0 0 0 0;
-}
-
-#vacancy_layout {
-    height: 1fr;
-    padding: 0;
 }
 
 #details_pane {
@@ -118,14 +108,24 @@ DataTable > .datatable--header {
     padding: 0;
 }
 
-LoadingIndicator {
-    color: $secondary;
+#vacancy_list_header {
+    background: transparent;
+    color: $foreground2;
+    padding: 0 0 0 4;
+    text-style: bold;
 }
+
+
+/* --- 4. Виджеты для выбора (Списки и Таблицы) --- */
 
 SelectionList {
     background: transparent;
     padding: 0;
     height: 1fr;
+    border: none;
+}
+
+SelectionList:focus {
     border: none;
 }
 
@@ -148,18 +148,30 @@ SelectionList > .selection-list--button-selected-highlighted {
     color: $primary;
 }
 
-SelectionList:focus {
+DataTable {
+    background: transparent;
+    color: $foreground3;
+    border: none;
+    scrollbar-color: $primary;
+    scrollbar-background: $background3 60%;
+}
+
+DataTable:focus {
     border: none;
 }
 
-# Резюме / профили
+DataTable > .datatable--header {
+    background: $background3;
+    color: $foreground1;
+}
 
 #resume_table,
 #profile_table {
     min-height: 20;
 }
 
-# Form
+
+/* --- 5. Экран настроек и формы --- */
 
 #config-form {
     padding: 1 2;
@@ -174,6 +186,39 @@ SelectionList:focus {
     margin: 1 0;
     text-style: bold;
     text-align: center;
+}
+
+/* Элементы формы: Поля ввода */
+Input,
+TextArea {
+    background: $background2;
+    color: $foreground3;
+    border: round $background3;
+    padding: 0;
+}
+
+Input:focus,
+TextArea:focus {
+    border: round $primary;
+}
+
+TextArea {
+    min-height: 12;
+    scrollbar-color: $secondary;
+}
+
+#cover_letter {
+    height: 15;
+}
+
+/* Элементы формы: Переключатели */
+Switch {
+    background: $background1;
+    border: round $background3;
+}
+
+Switch:focus {
+    border: round $primary;
 }
 
 .switch-container {
@@ -194,6 +239,7 @@ SelectionList:focus {
     margin-right: 2;
 }
 
+/* Элементы формы: Выпадающие списки */
 Select {
     background: transparent;
     padding: 0;
@@ -260,11 +306,56 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
     background: transparent;
 }
 
+/* Элементы формы: Контейнеры выбора региона/ролей */
+.summary-label {
+    margin: 1 0 0 0;
+}
+
 .value-display {
     padding: 0 0 1 0;
     color: $foreground3;
 }
 
+#pickers-container {
+    height: auto;
+    margin: 1 0;
+}
+
+.picker-group {
+    height: auto;
+    padding: 0 1 1 1;
+    border: round $background3;
+    width: 1fr;
+}
+
+/* 
+    ИСПРАВЛЕНИЕ:
+    Заменяем :first-child и :last-child, которые не поддерживаются,
+    на прямые селекторы по ID.
+*/
+#area-picker-container {
+    margin-right: 1;
+}
+
+#role-picker-container {
+    margin-left: 1;
+}
+
+.picker-group .summary-label {
+    margin-bottom: 1;
+}
+
+.picker-group .value-display {
+    height: 3;
+    min-height: 3;
+    content-align-vertical: top;
+}
+
+.picker-group Button {
+    width: 100%;
+}
+
+/* Элементы формы: Модальные окна выбора */
 .picker {
     background: $background2;
     border: round $background3;
@@ -286,29 +377,10 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
     padding-top: 1;
 }
 
-Input,
-TextArea {
-    background: $background2;
-    color: $foreground3;
-    border: round $background3;
-    padding: 0;
-}
 
-Input:focus,
-TextArea:focus {
-    border: round $primary;
-}
+/* --- 6. Компоненты --- */
 
-TextArea {
-    min-height: 12;
-    scrollbar-color: $secondary;
-}
-
-#cover_letter {
-    height: 15;
-}
-
-/* --- Общие стили для всех кнопок --- */
+/* Кнопки */
 Button {
     background: $background2;
     color: $foreground1;
@@ -344,46 +416,7 @@ Button.-success:focus {
     border: round $green;
 }
 
-# Уведомления
-
-Notification {
-    background: $background3;
-    color: $foreground3;
-    border: round $primary;
-}
-
-Notification.-information {
-    border: round $secondary;
-}
-
-Notification.-warning {
-    border: round $yellow;
-}
-
-Notification.-error {
-    border: round $red;
-}
-
-# Scrollbars/links
-
-* {
-    scrollbar-size: 1 1;
-    scrollbar-background: $background3;
-    scrollbar-color: $primary;
-    scrollbar-background-hover: $background2;
-    scrollbar-color-hover: $secondary;
-    link-color: $primary;
-}
-
-Switch {
-    background: $background1;
-    border: round $background3;
-}
-
-Switch:focus {
-    border: round $primary;
-}
-
+/* Пагинация */
 Pagination {
     width: 100%;
     height: auto;
@@ -403,6 +436,7 @@ Pagination > Button {
 
 Pagination > Button:hover {
     background: $secondary 40%;
+    border: none;
 }
 
 Pagination > Button.-primary,
@@ -416,4 +450,25 @@ Pagination > Button:focus {
     border: none;
     background: $primary;
     color: $background1;
+}
+
+
+/* --- 7. Уведомления --- */
+
+Notification {
+    background: $background3;
+    color: $foreground3;
+    border: round $primary;
+}
+
+Notification.-information {
+    border: round $secondary;
+}
+
+Notification.-warning {
+    border: round $yellow;
+}
+
+Notification.-error {
+    border: round $red;
 }

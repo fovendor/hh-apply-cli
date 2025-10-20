@@ -283,13 +283,16 @@ class ConfigScreen(Screen):
                 yield Label("Формат работы:")
                 yield Select([], id="work_format")
 
-                yield Label("Регион / город поиска:")
-                yield Static("-", id="area_summary", classes="value-display")
-                yield Button("Выбрать регион", id="area_picker")
+                with Horizontal(id="pickers-container"):
+                    with Vertical(id="area-picker-container", classes="picker-group"):
+                        yield Label("Регион / город поиска:", classes="summary-label")
+                        yield Static("-", id="area_summary", classes="value-display")
+                        yield Button("Выбрать регион", id="area_picker")
 
-                yield Label("Профессиональные роли (можно выбрать несколько):")
-                yield Static("-", id="roles_summary", classes="value-display")
-                yield Button("Выбрать роли", id="roles_picker")
+                    with Vertical(id="role-picker-container", classes="picker-group"):
+                        yield Label("Профессиональные роли:", classes="summary-label")
+                        yield Static("-", id="roles_summary", classes="value-display")
+                        yield Button("Выбрать роли", id="roles_picker")
 
                 yield Label("Область поиска:")
                 yield Select(

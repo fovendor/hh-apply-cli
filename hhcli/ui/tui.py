@@ -876,7 +876,7 @@ class HHCliApp(App):
     ]
 
     def __init__(self, client) -> None:
-        super().__init__()
+        super().__init__(watch_css=True)
         self.client = client
         self.dictionaries = {}
         self.css_manager = CSS_MANAGER

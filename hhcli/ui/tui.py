@@ -38,6 +38,12 @@ from ..database import (
     get_all_profiles,
 )
 from ..reference_data import ensure_reference_data
+from ..constants import (
+    ApiErrorReason,
+    ConfigKeys,
+    LogSource,
+    SearchMode,
+)
 
 from .config_screen import ConfigScreen
 from .css_manager import CssManager
@@ -46,17 +52,17 @@ from .widgets import Pagination
 CSS_MANAGER = CssManager()
 
 ERROR_REASON_MAP = {
-    "applied": "Отклик отправлен",
-    "already_applied": "Вы уже откликались",
-    "test_required": "Требуется пройти тест",
-    "questions_required": "Требуются ответы на вопросы",
-    "negotiations_forbidden": "Работодатель запретил отклики",
-    "resume_not_published": "Резюме не опубликовано",
-    "conditions_not_met": "Не выполнены условия",
-    "not_found": "Вакансия в архиве",
-    "bad_argument": "Некорректные параметры",
-    "unknown_api_error": "Неизвестная ошибка API",
-    "network_error": "Ошибка сети",
+    ApiErrorReason.APPLIED: "Отклик отправлен",
+    ApiErrorReason.ALREADY_APPLIED: "Вы уже откликались",
+    ApiErrorReason.TEST_REQUIRED: "Требуется пройти тест",
+    ApiErrorReason.QUESTIONS_REQUIRED: "Требуются ответы на вопросы",
+    ApiErrorReason.NEGOTIATIONS_FORBIDDEN: "Работодатель запретил отклики",
+    ApiErrorReason.RESUME_NOT_PUBLISHED: "Резюме не опубликовано",
+    ApiErrorReason.CONDITIONS_NOT_MET: "Не выполнены условия",
+    ApiErrorReason.NOT_FOUND: "Вакансия в архиве",
+    ApiErrorReason.BAD_ARGUMENT: "Некорректные параметры",
+    ApiErrorReason.UNKNOWN_API_ERROR: "Неизвестная ошибка API",
+    ApiErrorReason.NETWORK_ERROR: "Ошибка сети",
 }
 
 
@@ -113,7 +119,7 @@ def _is_failed(status: Optional[str]) -> bool:
 
 
 def _collect_delivered(
-        history: list[dict]
+    history: list[dict],
 ) -> tuple[set[str], set[str], set[str]]:
     """
     Возвращает:
@@ -121,31 +127,50 @@ def _collect_delivered(
       delivered_keys — ключи "title|employer" для delivered_ids
       delivered_employers — нормализованные названия компаний
     """
-    by_id: dict[str, list[dict]] = {}
+    processed_vacancies: dict[str, dict] = {}
+
     for h in history:
         vid = str(h.get("vacancy_id") or "")
         if not vid:
             continue
-        by_id.setdefault(vid, []).append(h)
+
+        status = h.get("status")
+        updated_at = h.get("applied_at")
+
+        if vid not in processed_vacancies:
+            processed_vacancies[vid] = {
+                "last_status": status,
+                "last_updated_at": updated_at,
+                "has_been_delivered": _is_delivered(status),
+                "title": h.get("vacancy_title"),
+                "employer": h.get("employer_name"),
+            }
+        else:
+            if updated_at and updated_at > processed_vacancies[vid]["last_updated_at"]:
+                processed_vacancies[vid]["last_status"] = status
+                processed_vacancies[vid]["last_updated_at"] = updated_at
+
+            if not processed_vacancies[vid]["has_been_delivered"] and _is_delivered(status):
+                processed_vacancies[vid]["has_been_delivered"] = True
 
     delivered_ids: set[str] = set()
-    for vid, items in by_id.items():
-        items.sort(key=lambda x: str(x.get("applied_at") or ""))
-        last_status = items[-1].get("status")
-        if any(_is_delivered(it.get("status"))
-               for it in items) and not _is_failed(last_status):
-            delivered_ids.add(vid)
-
     delivered_keys: set[str] = set()
     delivered_employers: set[str] = set()
-    for h in history:
-        vid = str(h.get("vacancy_id") or "")
-        if vid in delivered_ids:
-            k = (f"{_normalize(h.get('vacancy_title'))}|"
-                 f"{_normalize(h.get('employer_name'))}")
-            if k.strip('|'):
-                delivered_keys.add(k)
-            employer = _normalize(h.get("employer_name"))
+
+    for vid, data in processed_vacancies.items():
+        is_successfully_delivered = (
+            data["has_been_delivered"] and not _is_failed(data["last_status"])
+        )
+        if is_successfully_delivered:
+            delivered_ids.add(vid)
+            
+            title = _normalize(data["title"])
+            employer = _normalize(data["employer"])
+            
+            key = f"{title}|{employer}"
+            if key.strip('|'):
+                delivered_keys.add(key)
+            
             if employer:
                 delivered_employers.add(employer)
 
@@ -206,7 +231,7 @@ class VacancyListScreen(Screen):
     PER_PAGE = 50
 
     def __init__(
-        self, resume_id: str, search_mode: str,
+        self, resume_id: str, search_mode: SearchMode,
         config_snapshot: Optional[dict] = None
     ) -> None:
         super().__init__()
@@ -360,10 +385,10 @@ class VacancyListScreen(Screen):
     async def _fetch_worker(self, page: int) -> None:
         """Воркер, выполняющий API-запрос."""
         try:
-            if self.search_mode == 'manual':
+            if self.search_mode == SearchMode.MANUAL:
                 self.config_snapshot = load_profile_config(self.app.client.profile_name)
 
-            if self.search_mode == "auto":
+            if self.search_mode == SearchMode.AUTO:
                 result = self.app.client.get_similar_vacancies(
                     self.resume_id, page=page, per_page=self.PER_PAGE
                 )
@@ -375,7 +400,7 @@ class VacancyListScreen(Screen):
             pages = (result or {}).get("pages", 1)
             self.app.call_from_thread(self._on_vacancies_loaded, items, pages)
         except Exception as e:
-            log_to_db("ERROR", "VacancyListFetch", f"Ошибка загрузки: {e}")
+            log_to_db("ERROR", LogSource.VACANCY_LIST_FETCH, f"Ошибка загрузки: {e}")
             self.app.notify(f"Ошибка загрузки: {e}", severity="error")
 
     def _on_vacancies_loaded(self, items: list, pages: int) -> None:
@@ -384,7 +409,7 @@ class VacancyListScreen(Screen):
         config = load_profile_config(profile_name)
         
         filtered_items = items
-        if config.get("deduplicate_by_name_and_company", True):
+        if config.get(ConfigKeys.DEDUPLICATE_BY_NAME_AND_COMPANY, True):
             seen_keys = set()
             unique_vacancies = []
             for vac in items:
@@ -439,11 +464,11 @@ class VacancyListScreen(Screen):
             raw_name = vac["name"]
             strike = False
 
-            if (config.get("strikethrough_applied_vac") and
+            if (config.get(ConfigKeys.STRIKETHROUGH_APPLIED_VAC) and
                     vac["id"] in delivered_ids):
                 strike = True
 
-            if not strike and config.get("strikethrough_applied_vac_name"):
+            if not strike and config.get(ConfigKeys.STRIKETHROUGH_APPLIED_VAC_NAME):
                 employer_data = vac.get("employer") or {}
                 key = (f"{_normalize(vac['name'])}|"
                        f"{_normalize(employer_data.get('name'))}")
@@ -506,18 +531,18 @@ class VacancyListScreen(Screen):
         if not vacancy_id:
             return
         self._pending_details_id = vacancy_id
-        log_to_db("INFO", "VacancyListScreen",
+        log_to_db("INFO", LogSource.VACANCY_LIST_SCREEN,
                   f"Просмотр деталей: {vacancy_id}")
         self.update_vacancy_details(vacancy_id)
 
     def update_vacancy_details(self, vacancy_id: str) -> None:
         cached = get_vacancy_from_cache(vacancy_id)
         if cached:
-            log_to_db("INFO", "Cache", f"Кэш попадание: {vacancy_id}")
+            log_to_db("INFO", LogSource.CACHE, f"Кэш попадание: {vacancy_id}")
             self.display_vacancy_details(cached, vacancy_id)
             return
 
-        log_to_db("INFO", "Cache",
+        log_to_db("INFO", LogSource.CACHE,
                   f"Нет в кэше, тянем из API: {vacancy_id}")
         self.query_one(LoadingIndicator).display = True
         self.query_one("#vacancy_details").update("Загрузка...")
@@ -534,7 +559,7 @@ class VacancyListScreen(Screen):
                 self.display_vacancy_details, details, vacancy_id
             )
         except Exception as exc:
-            log_to_db("ERROR", "VacancyListScreen",
+            log_to_db("ERROR", LogSource.VACANCY_LIST_SCREEN,
                       f"Ошибка деталей {vacancy_id}: {exc}")
             self.app.call_from_thread(
                 self.query_one("#vacancy_details").update,
@@ -602,7 +627,7 @@ class VacancyListScreen(Screen):
         if selection.value in (None, "__none__"):
             return
         selection_list.toggle_current()
-        log_to_db("INFO", "VacancyListScreen",
+        log_to_db("INFO", LogSource.VACANCY_LIST_SCREEN,
                   f"Переключили выбор: {selection.value}")
 
     def action_apply_for_selected(self) -> None:
@@ -635,7 +660,7 @@ class VacancyListScreen(Screen):
 
     async def run_apply_worker(self) -> None:
         profile_name = self.app.client.profile_name
-        cover_letter = load_profile_config(profile_name).get("cover_letter", "")
+        cover_letter = load_profile_config(profile_name).get(ConfigKeys.COVER_LETTER, "")
 
         for vacancy_id in list(self.selected_vacancies):
             v = self.vacancies_by_id.get(vacancy_id, {})
@@ -656,7 +681,7 @@ class VacancyListScreen(Screen):
                     title="Отклик отправлен"
                 )
                 record_apply_action(
-                    vacancy_id, profile_name, vac_title, emp, "applied", None
+                    vacancy_id, profile_name, vac_title, emp, ApiErrorReason.APPLIED, None
                 )
             else:
                 self.app.call_from_thread(
@@ -735,7 +760,7 @@ class ResumeSelectionScreen(Screen):
             if r.get("id") == resume_id:
                 resume_title = r.get("title") or ""
                 break
-        log_to_db("INFO", "ResumeScreen",
+        log_to_db("INFO", LogSource.RESUME_SCREEN,
                   f"Выбрано резюме: {resume_id} '{resume_title}'")
         self.app.push_screen(
             SearchModeScreen(
@@ -785,18 +810,20 @@ class SearchModeScreen(Screen):
         self.app.push_screen(ConfigScreen())
 
     def action_run_search(self, mode: str) -> None:
-        log_to_db("INFO", "SearchModeScreen", f"Выбран режим '{mode}'")
-        if mode == "auto":
+        log_to_db("INFO", LogSource.SEARCH_MODE_SCREEN, f"Выбран режим '{mode}'")
+        search_mode_enum = SearchMode(mode)
+        
+        if search_mode_enum == SearchMode.AUTO:
             self.app.push_screen(
                 VacancyListScreen(
-                    resume_id=self.resume_id, search_mode="auto"
+                    resume_id=self.resume_id, search_mode=SearchMode.AUTO
                 )
             )
         else:
             cfg = load_profile_config(self.app.client.profile_name)
             self.app.push_screen(
                 VacancyListScreen(
-                    resume_id=self.resume_id, search_mode="manual",
+                    resume_id=self.resume_id, search_mode=SearchMode.MANUAL,
                     config_snapshot=cfg
                 )
             )
@@ -832,7 +859,7 @@ class ProfileSelectionScreen(Screen):
         if idx is None or idx < 0 or idx >= len(self.index_to_profile):
             return
         profile_name = self.index_to_profile[idx]
-        log_to_db("INFO", "ProfileScreen", f"Выбран профиль '{profile_name}'")
+        log_to_db("INFO", LogSource.PROFILE_SCREEN, f"Выбран профиль '{profile_name}'")
         set_active_profile(profile_name)
         self.dismiss(profile_name)
 
@@ -856,7 +883,7 @@ class HHCliApp(App):
         self.title = "hh-cli"
 
     async def on_mount(self) -> None:
-        log_to_db("INFO", "TUI", "Приложение смонтировано")
+        log_to_db("INFO", LogSource.TUI, "Приложение смонтировано")
         all_profiles = get_all_profiles()
 
         if not all_profiles:
@@ -869,14 +896,14 @@ class HHCliApp(App):
         if len(all_profiles) == 1:
             profile_name = all_profiles[0]["profile_name"]
             log_to_db(
-                "INFO", "TUI",
+                "INFO", LogSource.TUI,
                 f"Найден один профиль '{profile_name}', "
                 f"используется автоматически."
             )
             set_active_profile(profile_name)
             await self.proceed_with_profile(profile_name)
         else:
-            log_to_db("INFO", "TUI",
+            log_to_db("INFO", LogSource.TUI,
                       "Найдено несколько профилей — показ выбора.")
             self.push_screen(
                 ProfileSelectionScreen(all_profiles), self.on_profile_selected
@@ -886,10 +913,10 @@ class HHCliApp(App):
             self, selected_profile: Optional[str]
     ) -> None:
         if not selected_profile:
-            log_to_db("INFO", "TUI", "Выбор профиля отменён, выходим.")
+            log_to_db("INFO", LogSource.TUI, "Выбор профиля отменён, выходим.")
             self.exit()
             return
-        log_to_db("INFO", "TUI",
+        log_to_db("INFO", LogSource.TUI,
                   f"Выбран профиль '{selected_profile}' из списка.")
         await self.proceed_with_profile(selected_profile)
 
@@ -898,7 +925,7 @@ class HHCliApp(App):
             self.client.load_profile_data(profile_name)
             self.sub_title = f"Профиль: {profile_name}"
             profile_config = load_profile_config(profile_name)
-            self.css_manager.set_theme(profile_config.get("theme", "hhcli-base"))
+            self.css_manager.set_theme(profile_config.get(ConfigKeys.THEME, "hhcli-base"))
 
             self.run_worker(
                 self.cache_dictionaries, thread=True, name="DictCacheWorker"
@@ -913,7 +940,7 @@ class HHCliApp(App):
                 thread=True, name="SyncWorker"
             )
 
-            log_to_db("INFO", "TUI", f"Загрузка резюме для '{profile_name}'")
+            log_to_db("INFO", LogSource.TUI, f"Загрузка резюме для '{profile_name}'")
             resumes = self.client.get_my_resumes()
             items = (resumes or {}).get("items") or []
             if len(items) == 1:
@@ -927,7 +954,7 @@ class HHCliApp(App):
             else:
                 self.push_screen(ResumeSelectionScreen(resume_data=resumes))
         except Exception as exc:
-            log_to_db("ERROR", "TUI",
+            log_to_db("ERROR", LogSource.TUI,
                       f"Критическая ошибка профиля/резюме: {exc}")
             self.exit(result=exc)
 
@@ -935,21 +962,21 @@ class HHCliApp(App):
         """Проверяет кэш справочников и обновляет его."""
         cached_dicts = get_dictionary_from_cache("main_dictionaries")
         if cached_dicts:
-            log_to_db("INFO", "TUI", "Справочники загружены из кэша.")
+            log_to_db("INFO", LogSource.TUI, "Справочники загружены из кэша.")
             self.dictionaries = cached_dicts
         else:
             log_to_db(
-                "INFO", "TUI",
+                "INFO", LogSource.TUI,
                 "Кэш справочников пуст/устарел. Запрос к API..."
             )
             try:
                 live_dicts = self.client.get_dictionaries()
                 save_dictionary_to_cache("main_dictionaries", live_dicts)
                 self.dictionaries = live_dicts
-                log_to_db("INFO", "TUI",
+                log_to_db("INFO", LogSource.TUI,
                           "Справочники успешно закэшированы.")
             except Exception as e:
-                log_to_db("ERROR", "TUI",
+                log_to_db("ERROR", LogSource.TUI,
                           f"Не удалось загрузить справочники: {e}")
                 self.app.notify(
                     "Ошибка загрузки справочников!", severity="error"
@@ -959,19 +986,19 @@ class HHCliApp(App):
         try:
             updates = ensure_reference_data(self.client)
             if updates.get("areas"):
-                log_to_db("INFO", "TUI", "Справочник регионов обновлён.")
+                log_to_db("INFO", LogSource.TUI, "Справочник регионов обновлён.")
             if updates.get("professional_roles"):
                 log_to_db(
-                    "INFO", "TUI",
+                    "INFO", LogSource.TUI,
                     "Справочник профессиональных ролей обновлён."
                 )
         except Exception as exc:
             log_to_db(
-                "ERROR", "TUI",
+                "ERROR", LogSource.TUI,
                 f"Не удалось обновить справочники регионов/ролей: {exc}"
             )
 
     def action_quit(self) -> None:
-        log_to_db("INFO", "TUI", "Пользователь запросил выход.")
+        log_to_db("INFO", LogSource.TUI, "Пользователь запросил выход.")
         self.css_manager.cleanup()
         self.exit()

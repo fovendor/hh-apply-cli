@@ -10,8 +10,9 @@ from .database import (
     replace_areas,
     replace_professional_roles,
 )
+from .constants import AppStateKeys, LogSource
 
-if TYPE_CHECKING:  # pragma: no cover - only for typing
+if TYPE_CHECKING:
     from .client import HHApiClient
 
 
@@ -90,7 +91,7 @@ def _flatten_professional_roles(payload: dict[str, Any]) -> list[dict[str, Any]]
             keys = list(payload.keys())
         log_to_db(
             "ERROR",
-            "ReferenceData",
+            LogSource.REFERENCE_DATA,
             f"Справочник профессиональных ролей пуст или формат неизвестен: тип {type(payload).__name__}, ключи={keys}",
         )
         return []
@@ -127,12 +128,12 @@ def sync_areas(client: "HHApiClient") -> bool:
     """Синхронизирует справочник регионов с API hh.ru. Возвращает True, если произошли изменения."""
     data = client.get_areas()
     payload_hash = _hash_payload(data)
-    if payload_hash == get_app_state_value("areas_hash"):
+    if payload_hash == get_app_state_value(AppStateKeys.AREAS_HASH):
         return False
 
     flattened = _flatten_areas(data)
     replace_areas(flattened, data_hash=payload_hash)
-    log_to_db("INFO", "ReferenceData", f"Загружено {len(flattened)} записей регионов.")
+    log_to_db("INFO", LogSource.REFERENCE_DATA, f"Загружено {len(flattened)} записей регионов.")
     return True
 
 
@@ -140,14 +141,14 @@ def sync_professional_roles(client: "HHApiClient") -> bool:
     """Синхронизирует справочник профессиональных ролей. Возвращает True, если были изменения."""
     data = client.get_professional_roles()
     payload_hash = _hash_payload(data)
-    if payload_hash == get_app_state_value("professional_roles_hash"):
+    if payload_hash == get_app_state_value(AppStateKeys.PROFESSIONAL_ROLES_HASH):
         return False
 
     flattened = _flatten_professional_roles(data)
     if not flattened:
         return False
     replace_professional_roles(flattened, data_hash=payload_hash)
-    log_to_db("INFO", "ReferenceData", f"Загружено {len(flattened)} профессиональных ролей.")
+    log_to_db("INFO", LogSource.REFERENCE_DATA, f"Загружено {len(flattened)} профессиональных ролей.")
     return True
 
 

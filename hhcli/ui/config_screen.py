@@ -26,6 +26,7 @@ from ..database import (
     save_profile_config,
 )
 from ..reference_data import ensure_reference_data
+from ..constants import ConfigKeys, LogSource
 
 
 def _normalize(text: str | None) -> str:
@@ -363,7 +364,7 @@ class ConfigScreen(Screen):
             try:
                 ensure_reference_data(self.app.client)
             except Exception as exc:
-                log_to_db("ERROR", "ConfigScreen", f"Не удалось обновить справочники: {exc}")
+                log_to_db("ERROR", LogSource.CONFIG_SCREEN, f"Не удалось обновить справочники: {exc}")
                 pass
             areas = list_areas()
             roles = list_professional_roles()
@@ -374,14 +375,14 @@ class ConfigScreen(Screen):
                 "Не удалось загрузить справочник городов.",
                 severity="warning",
             )
-            log_to_db("WARN", "ConfigScreen", "Справочник городов недоступен")
+            log_to_db("WARN", LogSource.CONFIG_SCREEN, "Справочник городов недоступен")
         if not roles:
             self.app.call_from_thread(
                 self.app.notify,
                 "Не удалось загрузить справочник профессиональных ролей.",
                 severity="warning",
             )
-            log_to_db("WARN", "ConfigScreen", "Справочник профессиональных ролей недоступен")
+            log_to_db("WARN", LogSource.CONFIG_SCREEN, "Справочник профессиональных ролей недоступен")
 
         self.app.call_from_thread(self._populate_form, config, work_formats, areas, roles)
 
@@ -399,16 +400,16 @@ class ConfigScreen(Screen):
             [(item["name"], item["id"]) for item in work_formats]
         )
 
-        self.query_one("#text_include", Input).value = ", ".join(config.get("text_include", []))
-        self.query_one("#negative", Input).value = ", ".join(config.get("negative", []))
-        _set_select_value(self.query_one("#work_format", Select), config.get("work_format"))
-        _set_select_value(self.query_one("#search_field", Select), config.get("search_field"))
-        self.query_one("#period", Input).value = config.get("period", "")
-        self.query_one("#cover_letter", TextArea).load_text(config.get("cover_letter", ""))
-        self.query_one("#skip_applied_in_same_company", Switch).value = config.get("skip_applied_in_same_company", False)
-        self.query_one("#deduplicate_by_name_and_company", Switch).value = config.get("deduplicate_by_name_and_company", True)
-        self.query_one("#strikethrough_applied_vac", Switch).value = config.get("strikethrough_applied_vac", True)
-        self.query_one("#strikethrough_applied_vac_name", Switch).value = config.get("strikethrough_applied_vac_name", True)
+        self.query_one("#text_include", Input).value = ", ".join(config.get(ConfigKeys.TEXT_INCLUDE, []))
+        self.query_one("#negative", Input).value = ", ".join(config.get(ConfigKeys.NEGATIVE, []))
+        _set_select_value(self.query_one("#work_format", Select), config.get(ConfigKeys.WORK_FORMAT))
+        _set_select_value(self.query_one("#search_field", Select), config.get(ConfigKeys.SEARCH_FIELD))
+        self.query_one("#period", Input).value = config.get(ConfigKeys.PERIOD, "")
+        self.query_one("#cover_letter", TextArea).load_text(config.get(ConfigKeys.COVER_LETTER, ""))
+        self.query_one("#skip_applied_in_same_company", Switch).value = config.get(ConfigKeys.SKIP_APPLIED_IN_SAME_COMPANY, False)
+        self.query_one("#deduplicate_by_name_and_company", Switch).value = config.get(ConfigKeys.DEDUPLICATE_BY_NAME_AND_COMPANY, True)
+        self.query_one("#strikethrough_applied_vac", Switch).value = config.get(ConfigKeys.STRIKETHROUGH_APPLIED_VAC, True)
+        self.query_one("#strikethrough_applied_vac_name", Switch).value = config.get(ConfigKeys.STRIKETHROUGH_APPLIED_VAC_NAME, True)
 
         self._areas = [
             AreaOption(
@@ -427,8 +428,8 @@ class ConfigScreen(Screen):
             for role in roles
         ]
 
-        self._selected_area_id = config.get("area_id") or None
-        raw_roles = config.get("role_ids_config", [])
+        self._selected_area_id = config.get(ConfigKeys.AREA_ID) or None
+        raw_roles = config.get(ConfigKeys.ROLE_IDS_CONFIG, [])
         self._selected_role_ids = [str(rid) for rid in raw_roles if str(rid)]
 
         self._update_area_summary()
@@ -442,7 +443,7 @@ class ConfigScreen(Screen):
                 for theme in themes
             ]
         )
-        theme_select.value = config.get("theme", "hhcli-base")
+        theme_select.value = config.get(ConfigKeys.THEME, "hhcli-base")
 
     def _update_area_summary(self) -> None:
         summary_widget = self.query_one("#area_summary", Static)
@@ -526,22 +527,22 @@ class ConfigScreen(Screen):
             return [item.strip() for item in text.split(",") if item.strip()]
 
         config = {
-            "text_include": parse_list(self.query_one("#text_include", Input).value),
-            "negative": parse_list(self.query_one("#negative", Input).value),
-            "role_ids_config": list(self._selected_role_ids),
-            "work_format": _select_value(self.query_one("#work_format", Select)),
-            "area_id": self._selected_area_id or "",
-            "search_field": _select_value(self.query_one("#search_field", Select)),
-            "period": self.query_one("#period", Input).value,
-            "cover_letter": self.query_one("#cover_letter", TextArea).text,
-            "skip_applied_in_same_company": self.query_one("#skip_applied_in_same_company", Switch).value,
-            "deduplicate_by_name_and_company": self.query_one("#deduplicate_by_name_and_company", Switch).value,
-            "strikethrough_applied_vac": self.query_one("#strikethrough_applied_vac", Switch).value,
-            "strikethrough_applied_vac_name": self.query_one("#strikethrough_applied_vac_name", Switch).value,
-            "theme": self.query_one("#theme", Select).value or "hhcli-base",
+            ConfigKeys.TEXT_INCLUDE: parse_list(self.query_one("#text_include", Input).value),
+            ConfigKeys.NEGATIVE: parse_list(self.query_one("#negative", Input).value),
+            ConfigKeys.ROLE_IDS_CONFIG: list(self._selected_role_ids),
+            ConfigKeys.WORK_FORMAT: _select_value(self.query_one("#work_format", Select)),
+            ConfigKeys.AREA_ID: self._selected_area_id or "",
+            ConfigKeys.SEARCH_FIELD: _select_value(self.query_one("#search_field", Select)),
+            ConfigKeys.PERIOD: self.query_one("#period", Input).value,
+            ConfigKeys.COVER_LETTER: self.query_one("#cover_letter", TextArea).text,
+            ConfigKeys.SKIP_APPLIED_IN_SAME_COMPANY: self.query_one("#skip_applied_in_same_company", Switch).value,
+            ConfigKeys.DEDUPLICATE_BY_NAME_AND_COMPANY: self.query_one("#deduplicate_by_name_and_company", Switch).value,
+            ConfigKeys.STRIKETHROUGH_APPLIED_VAC: self.query_one("#strikethrough_applied_vac", Switch).value,
+            ConfigKeys.STRIKETHROUGH_APPLIED_VAC_NAME: self.query_one("#strikethrough_applied_vac_name", Switch).value,
+            ConfigKeys.THEME: self.query_one("#theme", Select).value or "hhcli-base",
         }
 
         save_profile_config(profile_name, config)
-        self.app.css_manager.set_theme(config["theme"])
+        self.app.css_manager.set_theme(config[ConfigKeys.THEME])
         self.app.notify("Настройки успешно сохранены.", title="Успех", severity="information")
         self.app.pop_screen()

@@ -11,6 +11,7 @@ from hhcli.database import (
     log_to_db, get_last_sync_timestamp, set_last_sync_timestamp,
     upsert_negotiation_history
 )
+from .constants import ApiErrorReason, LogSource
 
 API_BASE_URL = "https://api.hh.ru"
 OAUTH_URL = "https://hh.ru/oauth"
@@ -57,9 +58,9 @@ class HHApiClient:
         if not self.refresh_token:
             msg = (f"Нет refresh_token для обновления "
                    f"профиля '{self.profile_name}'.")
-            log_to_db("ERROR", "APIClient", msg)
+            log_to_db("ERROR", LogSource.API_CLIENT, msg)
             raise Exception(msg)
-        log_to_db("INFO", "APIClient",
+        log_to_db("INFO", LogSource.API_CLIENT,
                   f"Токен для профиля '{self.profile_name}' истек, обновляю...")
         payload = {
             "grant_type": "refresh_token",
@@ -69,13 +70,13 @@ class HHApiClient:
         try:
             response.raise_for_status()
         except requests.HTTPError as e:
-            log_to_db("ERROR", "APIClient",
+            log_to_db("ERROR", LogSource.API_CLIENT,
                       f"Ошибка обновления токена: {e.response.text}")
             raise e
         new_token_data = response.json()
         user_info = load_profile(self.profile_name)
         self._save_token(new_token_data, user_info)
-        log_to_db("INFO", "APIClient", "Токен успешно обновлен.")
+        log_to_db("INFO", LogSource.API_CLIENT, "Токен успешно обновлен.")
 
     def authorize(self, profile_name: str):
         self.profile_name = profile_name
@@ -113,7 +114,7 @@ class HHApiClient:
                     "и вернуться в терминал.</p>"
                 )
             except requests.RequestException as e:
-                log_to_db("ERROR", "OAuth", f"Ошибка при получении токена: {e}")
+                log_to_db("ERROR", LogSource.OAUTH, f"Ошибка при получении токена: {e}")
                 return f"Произошла ошибка при получении токена: {e}", 500
 
         server_thread = threading.Thread(
@@ -135,7 +136,7 @@ class HHApiClient:
             except Exception as e:
                 msg = ("Не удалось обновить токен. "
                        "Авторизация не удалась. Ошибка: {e}")
-                log_to_db("ERROR", "APIClient", msg)
+                log_to_db("ERROR", LogSource.API_CLIENT, msg)
                 raise ConnectionError(
                     "Не удалось обновить токен. Попробуйте пере-авторизоваться."
                 ) from e
@@ -151,7 +152,7 @@ class HHApiClient:
         except requests.HTTPError as e:
             if e.response.status_code == 401:
                 log_to_db(
-                    "WARN", "APIClient",
+                    "WARN", LogSource.API_CLIENT,
                     f"Получен 401 Unauthorized для {endpoint}. "
                     f"Попытка обновить токен."
                 )
@@ -166,14 +167,14 @@ class HHApiClient:
                 except Exception as refresh_e:
                     msg = ("Повторная попытка обновления токена не удалась. "
                            f"Ошибка: {refresh_e}")
-                    log_to_db("ERROR", "APIClient", msg)
+                    log_to_db("ERROR", LogSource.API_CLIENT, msg)
                     raise ConnectionError(
                         "Не удалось обновить токен. "
                         "Попробуйте пере-авторизоваться."
                     ) from refresh_e
             else:
                 log_to_db(
-                    "ERROR", "APIClient",
+                    "ERROR", LogSource.API_CLIENT,
                     f"HTTP ошибка для {method} {endpoint}: "
                     f"{e.response.status_code} {e.response.text}"
                 )
@@ -237,24 +238,24 @@ class HHApiClient:
 
     def get_dictionaries(self):
         """Загружает общие справочники hh.ru."""
-        log_to_db("INFO", "APIClient", "Запрос общих справочников...")
+        log_to_db("INFO", LogSource.API_CLIENT, "Запрос общих справочников...")
         return self._request("GET", "/dictionaries")
 
     def get_areas(self):
         """Возвращает полный список регионов hh.ru."""
-        log_to_db("INFO", "APIClient", "Запрос справочника регионов...")
+        log_to_db("INFO", LogSource.API_CLIENT, "Запрос справочника регионов...")
         return self._request("GET", "/areas")
 
     def get_professional_roles(self):
         """Возвращает справочник профессиональных ролей hh.ru."""
         log_to_db(
-            "INFO", "APIClient", "Запрос справочника профессиональных ролей..."
+            "INFO", LogSource.API_CLIENT, "Запрос справочника профессиональных ролей..."
         )
         return self._request("GET", "/professional_roles")
 
     def sync_negotiation_history(self):
         log_to_db(
-            "INFO", "SyncEngine",
+            "INFO", LogSource.SYNC_ENGINE,
             f"Запуск синхронизации истории откликов "
             f"для профиля '{self.profile_name}'."
         )
@@ -263,7 +264,7 @@ class HHApiClient:
         if last_sync:
             params["date_from"] = last_sync.isoformat()
             log_to_db(
-                "INFO", "SyncEngine",
+                "INFO", LogSource.SYNC_ENGINE,
                 f"Найдена последняя синхронизация: {last_sync}. "
                 f"Загружаем обновления."
             )
@@ -273,7 +274,7 @@ class HHApiClient:
             params["page"] = page
             try:
                 log_to_db(
-                    "INFO", "SyncEngine",
+                    "INFO", LogSource.SYNC_ENGINE,
                     f"Запрос страницы {page} истории откликов..."
                 )
                 data = self._request("GET", "/negotiations", params=params)
@@ -284,25 +285,25 @@ class HHApiClient:
                 page += 1
             except requests.HTTPError as e:
                 log_to_db(
-                    "ERROR", "SyncEngine",
+                    "ERROR", LogSource.SYNC_ENGINE,
                     f"Ошибка при загрузке истории откликов: {e}"
                 )
                 return
         if all_items:
             log_to_db(
-                "INFO", "SyncEngine",
+                "INFO", LogSource.SYNC_ENGINE,
                 f"Получено {len(all_items)} обновленных записей. "
                 f"Сохранение в БД..."
             )
             upsert_negotiation_history(all_items, self.profile_name)
-            log_to_db("INFO", "SyncEngine", "Сохранение завершено.")
+            log_to_db("INFO", LogSource.SYNC_ENGINE, "Сохранение завершено.")
         else:
             log_to_db(
-                "INFO", "SyncEngine",
+                "INFO", LogSource.SYNC_ENGINE,
                 "Новых обновлений в истории откликов не найдено."
             )
         set_last_sync_timestamp(self.profile_name, datetime.now())
-        log_to_db("INFO", "SyncEngine", "Синхронизация успешно завершена.")
+        log_to_db("INFO", LogSource.SYNC_ENGINE, "Синхронизация успешно завершена.")
 
     def apply_to_vacancy(
             self, resume_id: str, vacancy_id: str,
@@ -316,13 +317,13 @@ class HHApiClient:
         try:
             self._request("POST", "/negotiations", data=payload)
             log_to_db(
-                "INFO", "APIClient",
+                "INFO", LogSource.API_CLIENT,
                 f"Успешный отклик на вакансию {vacancy_id} "
                 f"с резюме {resume_id}."
             )
-            return True, "applied"
+            return True, ApiErrorReason.APPLIED
         except requests.HTTPError as e:
-            reason = "unknown_api_error"
+            reason = ApiErrorReason.UNKNOWN_API_ERROR
             try:
                 error_data = e.response.json()
                 if "errors" in error_data and error_data["errors"]:
@@ -334,15 +335,15 @@ class HHApiClient:
                 reason = f"http_{e.response.status_code}"
 
             log_to_db(
-                "WARN", "APIClient",
+                "WARN", LogSource.API_CLIENT,
                 f"API отклонил отклик на {vacancy_id}. "
                 f"Причина: {reason}. Детали: {e.response.text}"
             )
             return False, reason
         except requests.RequestException as e:
-            log_to_db("ERROR", "APIClient",
+            log_to_db("ERROR", LogSource.API_CLIENT,
                       f"Сетевая ошибка при отклике на {vacancy_id}: {e}")
-            return False, "network_error"
+            return False, ApiErrorReason.NETWORK_ERROR
 
     def logout(self, profile_name: str):
         delete_profile(profile_name)

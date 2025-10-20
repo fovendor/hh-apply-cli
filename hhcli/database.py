@@ -24,6 +24,8 @@ from sqlalchemy import (
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
+from .constants import AppStateKeys, ConfigKeys, LogSource
+
 APP_NAME = "hhcli"
 APP_AUTHOR = "fovendor"
 DATA_DIR = user_data_dir(APP_NAME, APP_AUTHOR)
@@ -51,25 +53,25 @@ def get_default_config() -> dict[str, Any]:
 +7 (000) 000-00-00 | Tg: @nickname | e-mail@gmail.com"""
     
     return {
-        "text_include": ["Python developer", "Backend developer"],
-        "negative": [
+        ConfigKeys.TEXT_INCLUDE: ["Python developer", "Backend developer"],
+        ConfigKeys.NEGATIVE: [
             "старший", "senior", "ведущий", "Middle", "ETL", "BI", "ML",
             "Data Scientist", "CV", "NLP", "Unity", "Unreal", "C#", "C++"
         ],
-        "work_format": "REMOTE",
-        "area_id": "113",
-        "search_field": "name",
-        "period": "3",
-        "role_ids_config": [
+        ConfigKeys.WORK_FORMAT: "REMOTE",
+        ConfigKeys.AREA_ID: "113",
+        ConfigKeys.SEARCH_FIELD: "name",
+        ConfigKeys.PERIOD: "3",
+        ConfigKeys.ROLE_IDS_CONFIG: [
             "96", "104", "107", "112", "113", "114", "116", "121", "124",
             "125", "126"
         ],
-        "cover_letter": default_cover_letter,
-        "skip_applied_in_same_company": False,
-        "deduplicate_by_name_and_company": True,
-        "strikethrough_applied_vac": True,
-        "strikethrough_applied_vac_name": True,
-        "theme": "hhcli-base",
+        ConfigKeys.COVER_LETTER: default_cover_letter,
+        ConfigKeys.SKIP_APPLIED_IN_SAME_COMPANY: False,
+        ConfigKeys.DEDUPLICATE_BY_NAME_AND_COMPANY: True,
+        ConfigKeys.STRIKETHROUGH_APPLIED_VAC: True,
+        ConfigKeys.STRIKETHROUGH_APPLIED_VAC_NAME: True,
+        ConfigKeys.THEME: "hhcli-base",
     }
 
 
@@ -277,7 +279,6 @@ def get_vacancy_from_cache(vacancy_id: str) -> dict | None:
             return json.loads(result)
         return None
 
-
 def _upsert_app_state(connection, key: str, value: str) -> None:
     stmt = sqlite_insert(app_state).values(key=key, value=value)
     stmt = stmt.on_conflict_do_update(index_elements=["key"], set_=dict(value=value))
@@ -292,14 +293,12 @@ def get_app_state_value(key: str) -> str | None:
         stmt = select(app_state.c.value).where(app_state.c.key == key)
         return connection.execute(stmt).scalar_one_or_none()
 
-
 def set_app_state_value(key: str, value: str) -> None:
     """Сохраняет ключ-значение в таблицу состояния приложения."""
     if not engine:
         return
     with engine.begin() as connection:
         _upsert_app_state(connection, key, value)
-
 
 def replace_areas(records: Sequence[dict[str, Any]], *, data_hash: str) -> None:
     """Полностью заменяет таблицу регионов на переданные данные."""
@@ -322,9 +321,8 @@ def replace_areas(records: Sequence[dict[str, Any]], *, data_hash: str) -> None:
         if prepared:
             connection.execute(areas.insert(), prepared)
         timestamp = datetime.now().isoformat()
-        _upsert_app_state(connection, "areas_hash", data_hash)
-        _upsert_app_state(connection, "areas_updated_at", timestamp)
-
+        _upsert_app_state(connection, AppStateKeys.AREAS_HASH, data_hash)
+        _upsert_app_state(connection, AppStateKeys.AREAS_UPDATED_AT, timestamp)
 
 def replace_professional_roles(records: Sequence[dict[str, Any]], *, data_hash: str) -> None:
     """Полностью заменяет таблицу профессиональных ролей на переданные данные."""
@@ -357,15 +355,14 @@ def replace_professional_roles(records: Sequence[dict[str, Any]], *, data_hash: 
         if prepared:
             connection.execute(professional_roles_catalog.insert(), prepared)
         timestamp = datetime.now().isoformat()
-        _upsert_app_state(connection, "professional_roles_hash", data_hash)
-        _upsert_app_state(connection, "professional_roles_updated_at", timestamp)
+        _upsert_app_state(connection, AppStateKeys.PROFESSIONAL_ROLES_HASH, data_hash)
+        _upsert_app_state(connection, AppStateKeys.PROFESSIONAL_ROLES_UPDATED_AT, timestamp)
     if duplicate_count:
         log_to_db(
             "WARN",
-            "ReferenceData",
+            LogSource.REFERENCE_DATA,
             f"Получено дубликатов профессиональных ролей: {duplicate_count}",
         )
-
 
 def list_areas() -> list[dict[str, Any]]:
     """Возвращает список всех регионов в порядке сортировки."""
@@ -386,7 +383,6 @@ def list_areas() -> list[dict[str, Any]]:
         )
         rows = connection.execute(stmt).fetchall()
         return [dict(row._mapping) for row in rows]
-
 
 def list_professional_roles() -> list[dict[str, Any]]:
     """Возвращает все профессиональные роли в порядке категорий и ролей."""
@@ -413,7 +409,6 @@ def list_professional_roles() -> list[dict[str, Any]]:
         rows = connection.execute(stmt).fetchall()
         return [dict(row._mapping) for row in rows]
 
-
 def get_area_full_name(area_id: str) -> str | None:
     """Возвращает полное название региона по ID."""
     if not engine:
@@ -421,7 +416,6 @@ def get_area_full_name(area_id: str) -> str | None:
     with engine.connect() as connection:
         stmt = select(areas.c.full_name).where(areas.c.id == str(area_id))
         return connection.execute(stmt).scalar_one_or_none()
-
 
 def get_professional_roles_by_ids(role_ids: Sequence[str]) -> list[dict[str, Any]]:
     """Возвращает данные по списку ID профессиональных ролей, сохраняя порядок входных данных."""
@@ -447,13 +441,12 @@ def init_db():
     metadata.create_all(engine)
     ensure_schema_upgrades()
 
-
 def ensure_schema_upgrades() -> None:
     """Гарантирует наличие новых колонок в существующей БД."""
     if not engine:
         return
 
-    default_theme = get_default_config()["theme"]
+    default_theme = get_default_config()[ConfigKeys.THEME]
 
     with engine.begin() as connection:
         columns = {
@@ -468,7 +461,6 @@ def ensure_schema_upgrades() -> None:
                 sa_text("UPDATE profile_configs SET theme = :theme WHERE theme IS NULL"),
                 {"theme": default_theme},
             )
-
 
 def log_to_db(level: str, source: str, message: str):
     if not engine:
@@ -494,7 +486,6 @@ def record_apply_action(
         connection.execute(stmt)
         connection.commit()
 
-
 def get_full_negotiation_history_for_profile(profile_name: str) -> list[dict]:
     with engine.connect() as connection:
         stmt = select(negotiation_history).where(
@@ -503,19 +494,16 @@ def get_full_negotiation_history_for_profile(profile_name: str) -> list[dict]:
         result = connection.execute(stmt).fetchall()
         return [dict(row._mapping) for row in result]
 
-
 def get_last_sync_timestamp(profile_name: str) -> datetime | None:
-    key = f"last_negotiation_sync_{profile_name}"
+    key = f"{AppStateKeys.LAST_NEGOTIATION_SYNC_PREFIX}{profile_name}"
     value = get_app_state_value(key)
     if value:
         return datetime.fromisoformat(value)
     return None
 
-
 def set_last_sync_timestamp(profile_name: str, timestamp: datetime):
-    key = f"last_negotiation_sync_{profile_name}"
+    key = f"{AppStateKeys.LAST_NEGOTIATION_SYNC_PREFIX}{profile_name}"
     set_app_state_value(key, timestamp.isoformat())
-
 
 def upsert_negotiation_history(negotiations: list[dict], profile_name: str):
     if not negotiations:
@@ -575,22 +563,22 @@ def save_or_update_profile(
             defaults = get_default_config()
 
             config_main = {k: v for k, v in defaults.items() if k not in
-                           ["text_include", "negative", "role_ids_config"]}
+                           [ConfigKeys.TEXT_INCLUDE, ConfigKeys.NEGATIVE, ConfigKeys.ROLE_IDS_CONFIG]}
             config_main["profile_name"] = profile_name
             connection.execute(insert(profile_configs).values(config_main))
 
             pos_keywords = [{"profile_name": profile_name, "keyword": kw}
-                            for kw in defaults["text_include"]]
+                            for kw in defaults[ConfigKeys.TEXT_INCLUDE]]
             if pos_keywords:
                 connection.execute(insert(config_positive_keywords), pos_keywords)
 
             neg_keywords = [{"profile_name": profile_name, "keyword": kw}
-                            for kw in defaults["negative"]]
+                            for kw in defaults[ConfigKeys.NEGATIVE]]
             if neg_keywords:
                 connection.execute(insert(config_negative_keywords), neg_keywords)
 
             roles = [{"profile_name": profile_name, "role_id": r_id}
-                     for r_id in defaults["role_ids_config"]]
+                     for r_id in defaults[ConfigKeys.ROLE_IDS_CONFIG]]
             if roles:
                 connection.execute(insert(config_professional_roles), roles)
 
@@ -608,30 +596,26 @@ def delete_profile(profile_name: str):
         connection.execute(stmt)
         connection.commit()
 
-
 def get_all_profiles() -> list[dict]:
     with engine.connect() as connection:
         stmt = select(profiles)
         result = connection.execute(stmt).fetchall()
         return [dict(row._mapping) for row in result]
 
-
 def set_active_profile(profile_name: str):
     with engine.connect() as connection:
         stmt = sqlite_insert(app_state).values(
-            key="active_profile", value=profile_name)
+            key=AppStateKeys.ACTIVE_PROFILE, value=profile_name)
         stmt = stmt.on_conflict_do_update(
             index_elements=['key'], set_=dict(value=profile_name))
         connection.execute(stmt)
         connection.commit()
 
-
 def get_active_profile_name() -> str | None:
     with engine.connect() as connection:
         stmt = select(app_state.c.value).where(
-            app_state.c.key == "active_profile")
+            app_state.c.key == AppStateKeys.ACTIVE_PROFILE)
         return connection.execute(stmt).scalar_one_or_none()
-
 
 def load_profile_config(profile_name: str) -> dict:
     """Загружает полную конфигурацию из всех связанных таблиц."""
@@ -644,28 +628,28 @@ def load_profile_config(profile_name: str) -> dict:
 
         config = dict(result._mapping)
         defaults = get_default_config()
-        config.setdefault("theme", defaults["theme"])
+        config.setdefault(ConfigKeys.THEME, defaults[ConfigKeys.THEME])
 
         stmt_pos_keywords = select(config_positive_keywords.c.keyword).where(
             config_positive_keywords.c.profile_name == profile_name)
-        config["text_include"] = connection.execute(stmt_pos_keywords).scalars().all()
+        config[ConfigKeys.TEXT_INCLUDE] = connection.execute(stmt_pos_keywords).scalars().all()
 
         stmt_keywords = select(config_negative_keywords.c.keyword).where(
             config_negative_keywords.c.profile_name == profile_name)
-        config["negative"] = connection.execute(stmt_keywords).scalars().all()
+        config[ConfigKeys.NEGATIVE] = connection.execute(stmt_keywords).scalars().all()
 
         stmt_roles = select(config_professional_roles.c.role_id).where(
             config_professional_roles.c.profile_name == profile_name)
-        config["role_ids_config"] = connection.execute(stmt_roles).scalars().all()
+        config[ConfigKeys.ROLE_IDS_CONFIG] = connection.execute(stmt_roles).scalars().all()
 
         return config
 
 def save_profile_config(profile_name: str, config: dict):
     """Сохраняет полную конфигурацию в связанные таблицы."""
     with engine.connect() as connection, connection.begin():
-        positive_keywords = config.pop("text_include", [])
-        negative_keywords = config.pop("negative", [])
-        role_ids = config.pop("role_ids_config", [])
+        positive_keywords = config.pop(ConfigKeys.TEXT_INCLUDE, [])
+        negative_keywords = config.pop(ConfigKeys.NEGATIVE, [])
+        role_ids = config.pop(ConfigKeys.ROLE_IDS_CONFIG, [])
         
         if config:
             connection.execute(update(profile_configs).where(

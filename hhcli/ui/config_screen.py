@@ -307,22 +307,22 @@ class ConfigScreen(Screen):
                 yield Static("Отображение и отклики", classes="header")
                 yield Horizontal(
                     Switch(id="skip_applied_in_same_company"),
-                    Label("Пропускать компании, куда уже был отклик"),
+                    Label("Пропускать компании, куда уже был отклик", classes="switch-label"),
                     classes="switch-container",
                 )
                 yield Horizontal(
                     Switch(id="deduplicate_by_name_and_company"),
-                    Label("Убирать дубли по 'Название+Компания'"),
+                    Label("Убирать дубли по 'Название+Компания'", classes="switch-label"),
                     classes="switch-container",
                 )
                 yield Horizontal(
                     Switch(id="strikethrough_applied_vac"),
-                    Label("Зачеркивать вакансии по точному ID"),
+                    Label("Зачеркивать вакансии по точному ID", classes="switch-label"),
                     classes="switch-container",
                 )
                 yield Horizontal(
                     Switch(id="strikethrough_applied_vac_name"),
-                    Label("Зачеркивать вакансии по 'Название+Компания'"),
+                    Label("Зачеркивать вакансии по 'Название+Компания'", classes="switch-label"),
                     classes="switch-container",
                 )
 

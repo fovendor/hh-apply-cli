@@ -51,7 +51,7 @@ Markdown {
     background: $background2;
     color: $foreground3;
     padding: 0 1;
-    border: solid $background3;
+    border: round $background3;
     border-title-align: left;
 }
 
@@ -85,7 +85,7 @@ DataTable > .datatable--header {
 
 .pane {
     background: $background2;
-    border: solid $background3;
+    border: round $background3;
     border-title-color: $foreground1;
     border-title-background: $background3;
     border-title-align: left;
@@ -164,7 +164,7 @@ SelectionList:focus {
 #config-form {
     padding: 1 2;
     background: $background2;
-    border: solid $background3;
+    border: round $background3;
 }
 
 #config-form > .header {
@@ -177,13 +177,19 @@ SelectionList:focus {
 }
 
 .switch-container {
-    align: left middle;
+    align-vertical: middle;
     padding: 0 1;
     background: transparent;
     height: auto;
 }
 
+.switch-label {
+    height: 100%;
+    content-align-vertical: middle;
+}
+
 .switch-container > Switch {
+    background: transparent;
     width: auto;
     margin-right: 2;
 }
@@ -196,7 +202,7 @@ Select {
 SelectCurrent {
     background: $background2;
     color: $foreground3;
-    border: solid $background3;
+    border: round $background3;
     padding: 0 1;
 }
 
@@ -215,7 +221,7 @@ SelectCurrent .arrow {
 }
 
 Select:focus > SelectCurrent {
-    border: solid $primary;
+    border: round $primary;
 }
 
 Select > SelectOverlay {
@@ -225,12 +231,12 @@ Select > SelectOverlay {
 SelectOverlay {
     background: $background2;
     color: $foreground3;
-    border: solid $background3;
+    border: round $background3;
     padding: 0 1;
 }
 
 SelectOverlay:focus {
-    border: solid $primary;
+    border: round $primary;
 }
 
 SelectOverlay > .option-list--option {
@@ -261,7 +267,7 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
 
 .picker {
     background: $background2;
-    border: solid $background3;
+    border: round $background3;
     padding: 1;
     height: auto;
 }
@@ -284,14 +290,13 @@ Input,
 TextArea {
     background: $background2;
     color: $foreground3;
-    border: solid $background3;
+    border: round $background3;
     padding: 0;
 }
 
 Input:focus,
-Select:focus,
 TextArea:focus {
-    border: solid $primary;
+    border: round $primary;
 }
 
 TextArea {
@@ -303,26 +308,40 @@ TextArea {
     height: 15;
 }
 
-/* --- Общие стили для всех кнопок в приложении --- */
+/* --- Общие стили для всех кнопок --- */
 Button {
-    background: $background3;
+    background: $background2;
     color: $foreground1;
-    border: solid $background3;
+    border: round $background3;
     text-style: bold;
-    padding: 0 1;
 }
 
 Button:hover {
-    background: $secondary 40%;
+    background: $background2;
+    color: $foreground3;
+    border: round $primary;
+    text-style: bold;
 }
 
 Button:focus {
-    border: solid $primary;
+    border: round $foreground1;
 }
 
 Button.-success {
-    background: $green;
-    color: $background1;
+    margin: 1 0 0 0;
+    background: $background2;
+    color: $green;
+    border: round $background3;
+}
+
+Button.-success:hover {
+    border: round $green;
+    color: $green;
+}
+
+Button.-success:focus {
+    color: $foreground3;
+    border: round $green;
 }
 
 # Уведомления
@@ -330,19 +349,19 @@ Button.-success {
 Notification {
     background: $background3;
     color: $foreground3;
-    border: solid $primary;
+    border: round $primary;
 }
 
 Notification.-information {
-    border: solid $secondary;
+    border: round $secondary;
 }
 
 Notification.-warning {
-    border: solid $yellow;
+    border: round $yellow;
 }
 
 Notification.-error {
-    border: solid $red;
+    border: round $red;
 }
 
 # Scrollbars/links
@@ -358,12 +377,11 @@ Notification.-error {
 
 Switch {
     background: $background1;
-    color: $foreground1;
-    border: solid $background3;
+    border: round $background3;
 }
 
 Switch:focus {
-    border: solid $primary;
+    border: round $primary;
 }
 
 Pagination {
@@ -384,7 +402,7 @@ Pagination > Button {
 }
 
 Pagination > Button:hover {
-    background: $background3;
+    background: $secondary 40%;
 }
 
 Pagination > Button.-primary,

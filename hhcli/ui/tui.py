@@ -297,17 +297,28 @@ class VacancyListScreen(Screen):
         company_style: str | None = "dim",
         previous_style: str | None = None,
     ) -> Text:
+        strike_style = "#8c8c8c" if strike else None
+
         index_segment = self._format_segment(
             index, self.ID_WIDTH, style=index_style
         )
         title_segment = self._format_segment(
-            title, self.TITLE_WIDTH, style=title_style, strike=strike
+            title,
+            self.TITLE_WIDTH,
+            style=strike_style or title_style,
+            strike=strike,
         )
         company_segment = self._format_segment(
-            company, self.COMPANY_WIDTH, style=company_style
+            company,
+            self.COMPANY_WIDTH,
+            style=strike_style or company_style,
+            strike=strike,
         )
         previous_segment = self._format_segment(
-            previous, self.PREVIOUS_WIDTH, style=previous_style
+            previous,
+            self.PREVIOUS_WIDTH,
+            style=strike_style or previous_style,
+            strike=strike,
         )
 
         return Text.assemble(

@@ -6,7 +6,7 @@ import html2text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Center, Horizontal, Vertical, VerticalScroll
-from textual.events import Key
+from textual.events import Key, MouseDown
 from textual.screen import Screen
 from textual.timer import Timer
 from textual.message import Message
@@ -79,6 +79,13 @@ class VacancySelectionList(SelectionList[str]):
             return
         self._allow_toggle = True
         self.action_select()
+        if self._allow_toggle:
+            self._allow_toggle = False
+
+    def action_select(self) -> None:
+        if not self._allow_toggle:
+            return
+        super().action_select()
 
     def _on_option_list_option_selected(
             self, event: OptionList.OptionSelected
@@ -96,6 +103,12 @@ class VacancySelectionList(SelectionList[str]):
             self.post_message(
                 self.SelectionHighlighted(self, event.option_index)
             )
+
+    def on_mouse_down(self, event: MouseDown) -> None:
+        if event.button != 1:
+            event.stop()
+            return
+        self.focus()
 
 
 def _normalize(text: Optional[str]) -> str:
@@ -215,10 +228,10 @@ class VacancyListScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Назад"),
-        Binding("x", "toggle_select", "Выбрать", show=True),
-        Binding("a", "apply_for_selected", "Откликнуться"),
-        Binding("c", "edit_config", "Настройки", show=True),
-        Binding("с", "edit_config", "Настройки (RU)", show=False),
+        Binding("-", "toggle_select", "Отметка", show=True, key_display="Space"),
+        Binding("a", "apply_for_selected", "Отклик"),
+        Binding("c", "edit_config", "Конфиг", show=True),
+        Binding("с", "edit_config", "Конфиг (RU)", show=False),
         Binding("left", "prev_page", "Предыдущая страница", show=False),
         Binding("right", "next_page", "Следующая страница", show=False),
     ]
@@ -622,7 +635,7 @@ class VacancyListScreen(Screen):
         self._toggle_current_selection()
 
     def on_key(self, event: Key) -> None:
-        if event.key not in ("x", "ч"):
+        if event.key != "space":
             return
         event.prevent_default()
         event.stop()

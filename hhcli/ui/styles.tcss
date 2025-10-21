@@ -318,8 +318,8 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
 
 #pickers-container {
     layout: horizontal;
-    grid-size: 2; /* Два столбца */
-    grid-gutter-horizontal: 2; /* Пространство между ними */
+    grid-size: 2;
+    grid-gutter-horizontal: 2;
     height: auto;
     margin: 1 0;
 }

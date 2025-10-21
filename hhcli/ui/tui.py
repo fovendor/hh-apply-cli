@@ -193,6 +193,10 @@ def _collect_delivered(
 class ApplyConfirmationScreen(Screen):
     """Экран подтверждения отправки откликов."""
 
+    BINDINGS = [
+        Binding("escape", "cancel", "Назад", show=True, key_display="Esc"),
+    ]
+
     def __init__(self, count: int) -> None:
         super().__init__()
         self.count = count
@@ -209,6 +213,7 @@ class ApplyConfirmationScreen(Screen):
             Input(placeholder="Введите число здесь..."),
             Static("", id="error_label"),
         )
+        yield Footer()
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
@@ -222,13 +227,16 @@ class ApplyConfirmationScreen(Screen):
         )
         event.input.value = ""
 
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
 
 class VacancyListScreen(Screen):
     """Список вакансий + детали справа."""
 
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Назад"),
-        Binding("-", "toggle_select", "Отметка", show=True, key_display="Space"),
+        Binding("_", "toggle_select", "Выбор", show=True, key_display="Space"),
         Binding("a", "apply_for_selected", "Отклик"),
         Binding("c", "edit_config", "Конфиг", show=True),
         Binding("с", "edit_config", "Конфиг (RU)", show=False),
@@ -387,12 +395,8 @@ class VacancyListScreen(Screen):
         self._fetch_and_refresh_vacancies(page=0)
 
     def on_screen_resume(self) -> None:
-        """
-        Вызывается, когда мы возвращаемся на этот экран (например, из настроек).
-        Перезагружает вакансии, чтобы применить новые настройки.
-        """
-        self.app.notify("Обновление списка вакансий...", timeout=1.5)
-        self._fetch_and_refresh_vacancies(self.current_page)
+        """При возврате фокусируем список вакансий без принудительного обновления."""
+        self.query_one(VacancySelectionList).focus()
 
     def _fetch_and_refresh_vacancies(self, page: int) -> None:
         """Запускает воркер для загрузки вакансий и обновления UI."""
@@ -671,7 +675,15 @@ class VacancyListScreen(Screen):
 
     def action_edit_config(self) -> None:
         """Открыть экран редактирования конфигурации из списка вакансий."""
-        self.app.push_screen(ConfigScreen())
+        self.app.push_screen(ConfigScreen(), self._on_config_screen_closed)
+
+    def _on_config_screen_closed(self, saved: bool | None) -> None:
+        """После закрытия настроек сохраняем выбор и при необходимости обновляем данные."""
+        self.query_one(VacancySelectionList).focus()
+        if not saved:
+            return
+        self.app.notify("Обновление списка вакансий...", timeout=1.5)
+        self._fetch_and_refresh_vacancies(self.current_page)
 
     def on_apply_confirmed(self, ok: bool) -> None:
         if not ok:

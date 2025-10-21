@@ -257,7 +257,7 @@ class ConfigScreen(Screen):
     """Экран для редактирования конфигурации профиля."""
 
     BINDINGS = [
-        Binding("escape", "app.pop_screen", "Отмена"),
+        Binding("escape", "cancel", "Отмена"),
         Binding("ctrl+s", "save_config", "Сохранить"),
     ]
 
@@ -521,6 +521,10 @@ class ConfigScreen(Screen):
         self._selected_role_ids = role_ids
         self._update_roles_summary()
 
+    def action_cancel(self) -> None:
+        """Закрыть экран без сохранения изменений."""
+        self.dismiss(False)
+
     def action_save_config(self) -> None:
         """Собрать данные с формы и сохранить в БД."""
         profile_name = self.app.client.profile_name
@@ -548,4 +552,4 @@ class ConfigScreen(Screen):
         save_profile_config(profile_name, config)
         self.app.css_manager.set_theme(config[ConfigKeys.THEME])
         self.app.notify("Настройки успешно сохранены.", title="Успех", severity="information")
-        self.app.pop_screen()
+        self.dismiss(True)

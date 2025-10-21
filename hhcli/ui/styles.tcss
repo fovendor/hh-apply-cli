@@ -382,8 +382,9 @@ ConfigUnsavedChangesDialog #config-confirm-center {
 }
 
 ConfigUnsavedChangesDialog #config-confirm-dialog {
+    border-title-color: $primary;
     background: $background2;
-    border: round $background3;
+    border: round $primary;
 }
 
 ConfigUnsavedChangesDialog #config-confirm-dialog > .config-confirm__message {

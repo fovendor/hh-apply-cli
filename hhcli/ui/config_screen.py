@@ -264,7 +264,7 @@ class ConfigUnsavedChangesDialog(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         with Center(id="config-confirm-center"):
             with Vertical(id="config-confirm-dialog", classes="config-confirm") as dialog:
-                dialog.border_title = "Прдтверждение"
+                dialog.border_title = "Подтверждение"
                 dialog.styles.border_title_align = "left"
                 yield Static(
                     "Сохранить внесённые изменения перед выходом?",

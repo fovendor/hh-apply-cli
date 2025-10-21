@@ -1,8 +1,9 @@
 from dataclasses import dataclass
+from typing import Any
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll, Horizontal
+from textual.containers import Vertical, VerticalScroll, Horizontal, Center
 from textual.screen import Screen, ModalScreen
 from textual.widgets import (
     Button,
@@ -253,6 +254,42 @@ class RolePickerDialog(ModalScreen[list[str] | None]):
             self.selected_ids.add(value)
 
 
+class ConfigUnsavedChangesDialog(ModalScreen[str | None]):
+    """Подтверждение выхода при наличии несохранённых изменений."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Отмена"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Center(id="config-confirm-center"):
+            with Vertical(id="config-confirm-dialog", classes="config-confirm") as dialog:
+                dialog.border_title = "Прдтверждение"
+                dialog.styles.border_title_align = "left"
+                yield Static(
+                    "Сохранить внесённые изменения перед выходом?",
+                    classes="config-confirm__message",
+                    expand=True,
+                )
+                with Horizontal(classes="config-confirm__buttons"):
+                    yield Button("Сохранить", id="confirm-save", variant="success")
+                    yield Button("Не сохранять", id="confirm-discard", variant="warning")
+                    yield Button("Отмена", id="confirm-cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        mapping = {
+            "confirm-save": "save",
+            "confirm-discard": "discard",
+            "confirm-cancel": "cancel",
+        }
+        decision = mapping.get(event.button.id or "")
+        if decision:
+            self.dismiss(decision)
+
+    def action_cancel(self) -> None:
+        self.dismiss("cancel")
+
+
 class ConfigScreen(Screen):
     """Экран для редактирования конфигурации профиля."""
 
@@ -269,6 +306,9 @@ class ConfigScreen(Screen):
         self._roles: list[RoleOption] = []
         self._selected_area_id: str | None = None
         self._selected_role_ids: list[str] = []
+        self._initial_config: dict[str, Any] = {}
+        self._form_loaded = False
+        self._confirm_dialog_active = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="config_screen"):
@@ -447,6 +487,8 @@ class ConfigScreen(Screen):
             ]
         )
         theme_select.value = config.get(ConfigKeys.THEME, "hhcli-base")
+        self._initial_config = self._current_form_config()
+        self._form_loaded = True
 
     def _update_area_summary(self) -> None:
         summary_widget = self.query_one("#area_summary", Static)
@@ -485,6 +527,32 @@ class ConfigScreen(Screen):
         name = theme_name.removeprefix("hhcli-").replace("-", " ")
         return name.title() or theme_name
 
+    def _current_form_config(self) -> dict[str, Any]:
+        """Возвращает текущее состояние формы в формате конфигурации."""
+        def parse_list(text: str) -> list[str]:
+            return [item.strip() for item in text.split(",") if item.strip()]
+
+        return {
+            ConfigKeys.TEXT_INCLUDE: parse_list(self.query_one("#text_include", Input).value),
+            ConfigKeys.NEGATIVE: parse_list(self.query_one("#negative", Input).value),
+            ConfigKeys.ROLE_IDS_CONFIG: list(self._selected_role_ids),
+            ConfigKeys.WORK_FORMAT: _select_value(self.query_one("#work_format", Select)),
+            ConfigKeys.AREA_ID: self._selected_area_id or "",
+            ConfigKeys.SEARCH_FIELD: _select_value(self.query_one("#search_field", Select)),
+            ConfigKeys.PERIOD: self.query_one("#period", Input).value,
+            ConfigKeys.COVER_LETTER: self.query_one("#cover_letter", TextArea).text,
+            ConfigKeys.SKIP_APPLIED_IN_SAME_COMPANY: self.query_one("#skip_applied_in_same_company", Switch).value,
+            ConfigKeys.DEDUPLICATE_BY_NAME_AND_COMPANY: self.query_one("#deduplicate_by_name_and_company", Switch).value,
+            ConfigKeys.STRIKETHROUGH_APPLIED_VAC: self.query_one("#strikethrough_applied_vac", Switch).value,
+            ConfigKeys.STRIKETHROUGH_APPLIED_VAC_NAME: self.query_one("#strikethrough_applied_vac_name", Switch).value,
+            ConfigKeys.THEME: self.query_one("#theme", Select).value or "hhcli-base",
+        }
+
+    def _has_unsaved_changes(self) -> bool:
+        if not self._form_loaded:
+            return False
+        return self._current_form_config() != self._initial_config
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "save-button":
             self.action_save_config()
@@ -522,34 +590,31 @@ class ConfigScreen(Screen):
         self._update_roles_summary()
 
     def action_cancel(self) -> None:
-        """Закрыть экран без сохранения изменений."""
-        self.dismiss(False)
+        """Закрыть экран, при необходимости спросив подтверждение."""
+        if not self._has_unsaved_changes():
+            self.dismiss(False)
+            return
+        if self._confirm_dialog_active:
+            return
+        self._confirm_dialog_active = True
+        self.app.push_screen(
+            ConfigUnsavedChangesDialog(),
+            self._on_unsaved_dialog_closed,
+        )
 
     def action_save_config(self) -> None:
         """Собрать данные с формы и сохранить в БД."""
         profile_name = self.app.client.profile_name
-
-        def parse_list(text: str) -> list[str]:
-            """Безопасно парсит строку с запятыми в список строк."""
-            return [item.strip() for item in text.split(",") if item.strip()]
-
-        config = {
-            ConfigKeys.TEXT_INCLUDE: parse_list(self.query_one("#text_include", Input).value),
-            ConfigKeys.NEGATIVE: parse_list(self.query_one("#negative", Input).value),
-            ConfigKeys.ROLE_IDS_CONFIG: list(self._selected_role_ids),
-            ConfigKeys.WORK_FORMAT: _select_value(self.query_one("#work_format", Select)),
-            ConfigKeys.AREA_ID: self._selected_area_id or "",
-            ConfigKeys.SEARCH_FIELD: _select_value(self.query_one("#search_field", Select)),
-            ConfigKeys.PERIOD: self.query_one("#period", Input).value,
-            ConfigKeys.COVER_LETTER: self.query_one("#cover_letter", TextArea).text,
-            ConfigKeys.SKIP_APPLIED_IN_SAME_COMPANY: self.query_one("#skip_applied_in_same_company", Switch).value,
-            ConfigKeys.DEDUPLICATE_BY_NAME_AND_COMPANY: self.query_one("#deduplicate_by_name_and_company", Switch).value,
-            ConfigKeys.STRIKETHROUGH_APPLIED_VAC: self.query_one("#strikethrough_applied_vac", Switch).value,
-            ConfigKeys.STRIKETHROUGH_APPLIED_VAC_NAME: self.query_one("#strikethrough_applied_vac_name", Switch).value,
-            ConfigKeys.THEME: self.query_one("#theme", Select).value or "hhcli-base",
-        }
+        config = self._current_form_config()
 
         save_profile_config(profile_name, config)
         self.app.css_manager.set_theme(config[ConfigKeys.THEME])
         self.app.notify("Настройки успешно сохранены.", title="Успех", severity="information")
         self.dismiss(True)
+
+    def _on_unsaved_dialog_closed(self, decision: str | None) -> None:
+        self._confirm_dialog_active = False
+        if decision == "save":
+            self.action_save_config()
+        elif decision == "discard":
+            self.dismiss(False)

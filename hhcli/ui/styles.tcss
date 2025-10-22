@@ -447,6 +447,23 @@ Button.-success:focus {
     border: round $green;
 }
 
+Button.decline {
+    margin: 1 0 0 0;
+    background: $background2;
+    color: $red;
+    border: round $background3;
+}
+
+Button.decline:hover {
+    border: round $red;
+    color: $red;
+}
+
+Button.decline:focus {
+    color: $foreground3;
+    border: round $red;
+}
+
 /* Пагинация */
 Pagination {
     width: 100%;

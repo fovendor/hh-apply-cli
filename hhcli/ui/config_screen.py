@@ -272,8 +272,8 @@ class ConfigUnsavedChangesDialog(ModalScreen[str | None]):
                     expand=True,
                 )
                 with Horizontal(classes="config-confirm__buttons"):
-                    yield Button("Сохранить", id="confirm-save", variant="success")
-                    yield Button("Не сохранять", id="confirm-discard", variant="warning")
+                    yield Button("Да", id="confirm-save", variant="success")
+                    yield Button("Нет", id="confirm-discard", classes="decline")
                     yield Button("Отмена", id="confirm-cancel")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:

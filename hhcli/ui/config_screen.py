@@ -294,7 +294,7 @@ class ConfigScreen(Screen):
     """Экран для редактирования конфигурации профиля."""
 
     BINDINGS = [
-        Binding("escape", "cancel", "Отмена"),
+        Binding("escape", "cancel", "Назад"),
         Binding("ctrl+s", "save_config", "Сохранить"),
     ]
 

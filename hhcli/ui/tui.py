@@ -1,5 +1,6 @@
 import html
 import random
+from datetime import datetime
 from typing import Iterable, Optional
 
 import html2text
@@ -21,12 +22,13 @@ from textual.widgets import (
     Static,
     Button,
 )
-from textual.widgets._option_list import OptionList
+from textual.widgets._option_list import OptionList, Option
 from textual.widgets._selection_list import Selection
 from rich.text import Text
 
 from ..database import (
     get_full_negotiation_history_for_profile,
+    get_negotiation_history_for_resume,
     load_profile_config,
     log_to_db,
     record_apply_action,
@@ -103,6 +105,16 @@ class VacancySelectionList(SelectionList[str]):
             self.post_message(
                 self.SelectionHighlighted(self, event.option_index)
             )
+
+    def on_mouse_down(self, event: MouseDown) -> None:
+        if event.button != 1:
+            event.stop()
+            return
+        self.focus()
+
+
+class HistoryOptionList(OptionList):
+    """Option list without toggle markers, used for read-only history."""
 
     def on_mouse_down(self, event: MouseDown) -> None:
         if event.button != 1:
@@ -260,9 +272,11 @@ class VacancyListScreen(Screen):
     BINDINGS = [
         Binding("escape", "app.pop_screen", "Назад"),
         Binding("_", "toggle_select", "Выбор", show=True, key_display="Space"),
-        Binding("a", "apply_for_selected", "Отклик"),
-        Binding("c", "edit_config", "Конфиг", show=True),
-        Binding("с", "edit_config", "Конфиг (RU)", show=False),
+        Binding("a", "apply_for_selected", "Откликнуться"),
+        Binding("h", "open_history", "История", show=True),
+        Binding("р", "open_history", "История (RU)", show=False),
+        Binding("c", "edit_config", "Настройки", show=True),
+        Binding("с", "edit_config", "Настройки (RU)", show=False),
         Binding("left", "prev_page", "Предыдущая страница", show=False),
         Binding("right", "next_page", "Следующая страница", show=False),
     ]
@@ -275,13 +289,18 @@ class VacancyListScreen(Screen):
     PER_PAGE = 50
 
     def __init__(
-        self, resume_id: str, search_mode: SearchMode,
-        config_snapshot: Optional[dict] = None
+        self,
+        resume_id: str,
+        search_mode: SearchMode,
+        config_snapshot: Optional[dict] = None,
+        *,
+        resume_title: str | None = None,
     ) -> None:
         super().__init__()
         self.vacancies: list[dict] = []
         self.vacancies_by_id: dict[str, dict] = {}
         self.resume_id = resume_id
+        self.resume_title = (resume_title or "").strip()
         self.selected_vacancies: set[str] = set()
         self._pending_details_id: Optional[str] = None
         self.current_page = 0
@@ -700,6 +719,15 @@ class VacancyListScreen(Screen):
         """Открыть экран редактирования конфигурации из списка вакансий."""
         self.app.push_screen(ConfigScreen(), self._on_config_screen_closed)
 
+    def action_open_history(self) -> None:
+        """Показать историю откликов для текущего резюме."""
+        self.app.push_screen(
+            NegotiationHistoryScreen(
+                resume_id=self.resume_id,
+                resume_title=self.resume_title,
+            )
+        )
+
     def _on_config_screen_closed(self, saved: bool | None) -> None:
         """После закрытия настроек сохраняем выбор и при необходимости обновляем данные."""
         self.query_one(VacancySelectionList).focus()
@@ -755,7 +783,14 @@ class VacancyListScreen(Screen):
                     title="Отклик отправлен"
                 )
                 record_apply_action(
-                    vacancy_id, profile_name, vac_title, emp, ApiErrorReason.APPLIED, None
+                    vacancy_id,
+                    profile_name,
+                    self.resume_id,
+                    self.resume_title,
+                    vac_title,
+                    emp,
+                    ApiErrorReason.APPLIED,
+                    None,
                 )
             else:
                 self.app.call_from_thread(
@@ -764,8 +799,14 @@ class VacancyListScreen(Screen):
                     title="Отклик не удался", severity="error", timeout=2
                 )
                 record_apply_action(
-                    vacancy_id, profile_name, vac_title, emp, "failed",
-                    human_readable_reason
+                    vacancy_id,
+                    profile_name,
+                    self.resume_id,
+                    self.resume_title,
+                    vac_title,
+                    emp,
+                    "failed",
+                    human_readable_reason,
                 )
 
         def finalize() -> None:
@@ -794,6 +835,269 @@ class VacancyListScreen(Screen):
         """Обработчик нажатия на кнопку пагинации."""
         self._fetch_and_refresh_vacancies(message.page)
 
+
+class NegotiationHistoryScreen(Screen):
+    """Экран просмотра истории откликов."""
+
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Назад"),
+        Binding("c", "edit_config", "Настройки", show=True),
+        Binding("с", "edit_config", "Настройки (RU)", show=False),
+    ]
+
+    ID_WIDTH = 5
+    TITLE_WIDTH = 40
+    COMPANY_WIDTH = 24
+    DATE_WIDTH = 20
+    STATUS_WIDTH = 18
+
+    def __init__(self, resume_id: str, resume_title: str | None = None) -> None:
+        super().__init__()
+        self.resume_id = str(resume_id or "")
+        self.resume_title = (resume_title or "").strip()
+        self.history: list[dict] = []
+        self.history_by_vacancy: dict[str, dict] = {}
+        self._pending_details_id: Optional[str] = None
+        self._debounce_timer: Optional[Timer] = None
+
+        self.html_converter = html2text.HTML2Text()
+        self.html_converter.body_width = 0
+        self.html_converter.ignore_links = False
+        self.html_converter.ignore_images = True
+        self.html_converter.mark_code = True
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="history_screen"):
+            yield Header(show_clock=True, name="hh-cli")
+            if self.resume_title:
+                yield Static(
+                    f"Резюме: [b cyan]{self.resume_title}[/b cyan]\n",
+                    id="history_resume_label",
+                )
+            with Horizontal(id="history_layout"):
+                with Vertical(id="history_panel", classes="pane") as history_panel:
+                    history_panel.border_title = "История откликов"
+                    history_panel.styles.border_title_align = "left"
+                    yield Static(id="history_list_header")
+                    yield HistoryOptionList(id="history_list")
+                with Vertical(id="history_details_panel", classes="pane") as details_panel:
+                    details_panel.border_title = "Детали"
+                    details_panel.styles.border_title_align = "left"
+                    with VerticalScroll(id="history_details_pane"):
+                        yield Markdown(
+                            "[dim]Выберите отклик слева, чтобы увидеть детали.[/dim]",
+                            id="history_details",
+                        )
+                        yield LoadingIndicator(id="history_loader")
+            yield Footer()
+
+    def on_mount(self) -> None:
+        self._refresh_history()
+
+    def on_screen_resume(self) -> None:
+        self.query_one(HistoryOptionList).focus()
+
+    def _refresh_history(self) -> None:
+        header = self.query_one("#history_list_header", Static)
+        header.update(self._build_header_text())
+
+        option_list = self.query_one(HistoryOptionList)
+        option_list.clear_options()
+
+        profile_name = self.app.client.profile_name
+        entries = get_negotiation_history_for_resume(profile_name, self.resume_id)
+
+        self.history = entries
+        self.history_by_vacancy = {
+            str(item.get("vacancy_id")): item for item in entries if item.get("vacancy_id")
+        }
+
+        if not entries:
+            option_list.add_option(
+                Option("История откликов пуста.", "__none__", disabled=True)
+            )
+            self.query_one("#history_details", Markdown).update(
+                "[dim]Нет данных для отображения.[/dim]"
+            )
+            self.query_one("#history_loader", LoadingIndicator).display = False
+            return
+
+        for idx, entry in enumerate(entries, start=1):
+            vacancy_id = str(entry.get("vacancy_id") or "")
+            title = entry.get("vacancy_title") or vacancy_id
+            company = entry.get("employer_name") or "-"
+            applied_label = self._format_datetime(entry.get("applied_at"))
+            status_label = entry.get("status") or "-"
+
+            row_text = self._build_row_text(
+                index=f"#{idx}",
+                title=title,
+                company=company,
+                applied=applied_label,
+                status=status_label,
+            )
+            option_list.add_option(Option(row_text, vacancy_id))
+
+        option_list.highlighted = 0 if option_list.option_count else None
+        option_list.focus()
+
+        if option_list.option_count and option_list.highlighted is not None:
+            focused_option = option_list.get_option_at_index(option_list.highlighted)
+            if focused_option and focused_option.id not in (None, "__none__"):
+                self.load_vacancy_details(str(focused_option.id))
+
+    def _build_header_text(self) -> Text:
+        return Text.assemble(
+            VacancyListScreen._format_segment("№", self.ID_WIDTH, style="bold"),
+            Text("  "),
+            VacancyListScreen._format_segment(
+                "Название вакансии", self.TITLE_WIDTH, style="bold"
+            ),
+            Text("  "),
+            VacancyListScreen._format_segment("Компания", self.COMPANY_WIDTH, style="bold"),
+            Text("  "),
+            VacancyListScreen._format_segment("Статус", self.STATUS_WIDTH, style="bold"),
+            Text("  "),
+            VacancyListScreen._format_segment(
+                "Дата отклика", self.DATE_WIDTH, style="bold"
+            ),
+        )
+
+    def _build_row_text(
+        self,
+        *,
+        index: str,
+        title: str,
+        company: str,
+        status: str,
+        applied: str,
+    ) -> Text:
+        return Text.assemble(
+            VacancyListScreen._format_segment(index, self.ID_WIDTH, style="bold"),
+            Text("  "),
+            VacancyListScreen._format_segment(title, self.TITLE_WIDTH),
+            Text("  "),
+            VacancyListScreen._format_segment(company, self.COMPANY_WIDTH),
+            Text("  "),
+            VacancyListScreen._format_segment(status, self.STATUS_WIDTH),
+            Text("  "),
+            VacancyListScreen._format_segment(applied, self.DATE_WIDTH),
+        )
+
+    @staticmethod
+    def _format_datetime(value: datetime | str | None) -> str:
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d %H:%M")
+        if isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return dt.strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                return value
+        return "-"
+
+    def on_option_list_option_highlighted(
+        self, event: OptionList.OptionHighlighted
+    ) -> None:
+        if self._debounce_timer:
+            self._debounce_timer.stop()
+        vacancy_id = event.option.id
+        if not vacancy_id or vacancy_id == "__none__":
+            return
+        self._debounce_timer = self.set_timer(
+            0.2, lambda vid=str(vacancy_id): self.load_vacancy_details(vid)
+        )
+
+    def load_vacancy_details(self, vacancy_id: Optional[str]) -> None:
+        if not vacancy_id:
+            return
+        self._pending_details_id = vacancy_id
+        self.query_one("#history_loader", LoadingIndicator).display = True
+        self.query_one("#history_details").update("Загрузка...")
+
+        cached = get_vacancy_from_cache(vacancy_id)
+        if cached:
+            self.display_history_details(cached, vacancy_id)
+            self.query_one("#history_loader", LoadingIndicator).display = False
+            return
+
+        self.run_worker(
+            self.fetch_history_details(vacancy_id),
+            exclusive=True,
+            thread=True,
+        )
+
+    async def fetch_history_details(self, vacancy_id: str) -> None:
+        try:
+            details = self.app.client.get_vacancy_details(vacancy_id)
+            save_vacancy_to_cache(vacancy_id, details)
+            self.app.call_from_thread(
+                self.display_history_details,
+                details,
+                vacancy_id,
+            )
+        except Exception as exc:
+            log_to_db("ERROR", LogSource.VACANCY_LIST_SCREEN, f"Ошибка деталей {vacancy_id}: {exc}")
+            self.app.call_from_thread(self._display_details_error, f"Ошибка загрузки: {exc}")
+
+    def display_history_details(self, details: dict, vacancy_id: str) -> None:
+        if self._pending_details_id != vacancy_id:
+            return
+
+        record = self.history_by_vacancy.get(vacancy_id, {})
+
+        salary_line = "N/A"
+        salary_data = details.get("salary")
+        if salary_data:
+            s_from = salary_data.get("from")
+            s_to = salary_data.get("to")
+            currency = (salary_data.get("currency") or "").upper()
+            gross_str = " (до вычета налогов)" if salary_data.get("gross") else ""
+
+            parts = []
+            if s_from:
+                parts.append(f"от {s_from:,}".replace(",", " "))
+            if s_to:
+                parts.append(f"до {s_to:,}".replace(",", " "))
+            if parts:
+                salary_line = f"{' '.join(parts)} {currency}{gross_str}"
+
+        desc_html = details.get("description", "")
+        desc_md = self.html_converter.handle(html.unescape(desc_html)).strip()
+        skills = details.get("key_skills") or []
+        skills_text = "* " + "\n* ".join(
+            s["name"] for s in skills
+        ) if skills else "Не указаны"
+
+        applied_label = self._format_datetime(record.get("applied_at"))
+        status_label = record.get("status") or "-"
+
+        company_name = details.get("employer", {}).get("name") or record.get("employer_name") or "-"
+        link = details.get("alternate_url") or "—"
+
+        doc = (
+            f"## {details.get('name', record.get('vacancy_title', vacancy_id))}\n\n"
+            f"**Компания:** {company_name}\n\n"
+            f"**Ссылка:** {link}\n\n"
+            f"**Зарплата:** {salary_line}\n\n"
+            f"**Ключевые навыки:**\n{skills_text}\n\n"
+            f"**Дата и время отклика:** {applied_label}\n\n"
+            f"**Статус:** {status_label}\n\n"
+            f"**Описание:**\n\n{desc_md}\n"
+        )
+        self.query_one("#history_details").update(doc)
+        self.query_one("#history_loader", LoadingIndicator).display = False
+        self.query_one("#history_details_pane").scroll_home(animate=False)
+
+    def action_edit_config(self) -> None:
+        self.app.push_screen(ConfigScreen(), self._on_config_closed)
+
+    def _on_config_closed(self, _: bool | None) -> None:
+        self.query_one(HistoryOptionList).focus()
+
+    def _display_details_error(self, message: str) -> None:
+        self.query_one("#history_details", Markdown).update(message)
+        self.query_one("#history_loader", LoadingIndicator).display = False
 
 class ResumeSelectionScreen(Screen):
     """Выбор резюме."""
@@ -890,15 +1194,19 @@ class SearchModeScreen(Screen):
         if search_mode_enum == SearchMode.AUTO:
             self.app.push_screen(
                 VacancyListScreen(
-                    resume_id=self.resume_id, search_mode=SearchMode.AUTO
+                    resume_id=self.resume_id,
+                    search_mode=SearchMode.AUTO,
+                    resume_title=self.resume_title,
                 )
             )
         else:
             cfg = load_profile_config(self.app.client.profile_name)
             self.app.push_screen(
                 VacancyListScreen(
-                    resume_id=self.resume_id, search_mode=SearchMode.MANUAL,
-                    config_snapshot=cfg
+                    resume_id=self.resume_id,
+                    search_mode=SearchMode.MANUAL,
+                    config_snapshot=cfg,
+                    resume_title=self.resume_title,
                 )
             )
 

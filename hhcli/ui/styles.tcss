@@ -108,6 +108,12 @@ Footer > .footer--highlight-key {
     padding: 0;
 }
 
+#history_details {
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
 #vacancy_list_header {
     background: transparent;
     color: $foreground2;
@@ -430,6 +436,24 @@ ApplyConfirmationDialog #apply_confirm_error {
     text-align: center;
     content-align: center middle;
     padding-bottom: 1;
+}
+
+#history_list {
+    background: transparent;
+    border: none;
+    padding: 0;
+    height: 1fr;
+}
+
+#history_list .option-list--option,
+#history_list .option-list--option-hover {
+    background: transparent;
+    padding: 0 1;
+}
+
+#history_list .option-list--option-highlighted,
+#history_list .option-list--option-hover-highlighted {
+    background: $background3 35%;
 }
 
 

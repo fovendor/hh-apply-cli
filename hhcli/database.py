@@ -20,6 +20,7 @@ from sqlalchemy import (
     delete,
     update,
     text as sa_text,
+    UniqueConstraint,
 )
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -148,14 +149,19 @@ app_logs = Table(
 )
 
 negotiation_history = Table(
-    "negotiation_history", metadata,
-    Column("vacancy_id", String, primary_key=True),
+    "negotiation_history",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("vacancy_id", String, nullable=False),
     Column("profile_name", String, nullable=False),
+    Column("resume_id", String, nullable=False, default=""),
+    Column("resume_title", String),
     Column("vacancy_title", String),
     Column("employer_name", String),
     Column("status", String),
     Column("reason", String),
-    Column("applied_at", DateTime, nullable=False)
+    Column("applied_at", DateTime, nullable=False),
+    UniqueConstraint("vacancy_id", "resume_id", name="uq_negotiation_vacancy_resume"),
 )
 
 vacancy_cache = Table(
@@ -462,6 +468,93 @@ def ensure_schema_upgrades() -> None:
                 {"theme": default_theme},
             )
 
+        history_info = list(
+            connection.execute(sa_text("PRAGMA table_info(negotiation_history)"))
+        )
+        history_columns = {row[1] for row in history_info}
+
+        needs_rebuild = bool(history_info) and (
+            "id" not in history_columns or "resume_id" not in history_columns
+        )
+
+        if needs_rebuild:
+            connection.execute(
+                sa_text(
+                    """
+CREATE TABLE negotiation_history_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vacancy_id TEXT NOT NULL,
+    profile_name TEXT NOT NULL,
+    resume_id TEXT NOT NULL DEFAULT '',
+    resume_title TEXT,
+    vacancy_title TEXT,
+    employer_name TEXT,
+    status TEXT,
+    reason TEXT,
+    applied_at DATETIME NOT NULL,
+    UNIQUE(vacancy_id, resume_id)
+)
+                    """
+                )
+            )
+
+            if "resume_id" in history_columns:
+                connection.execute(
+                    sa_text(
+                        """
+INSERT INTO negotiation_history_new (
+    vacancy_id, profile_name, resume_id, resume_title,
+    vacancy_title, employer_name, status, reason, applied_at
+)
+SELECT
+    vacancy_id,
+    profile_name,
+    COALESCE(resume_id, ''),
+    COALESCE(resume_title, ''),
+    vacancy_title,
+    employer_name,
+    status,
+    reason,
+    applied_at
+FROM negotiation_history
+                        """
+                    )
+                )
+            else:
+                connection.execute(
+                    sa_text(
+                        """
+INSERT INTO negotiation_history_new (
+    vacancy_id, profile_name, resume_id, resume_title,
+    vacancy_title, employer_name, status, reason, applied_at
+)
+SELECT
+    vacancy_id,
+    profile_name,
+    '',
+    '',
+    vacancy_title,
+    employer_name,
+    status,
+    reason,
+    applied_at
+FROM negotiation_history
+                        """
+                    )
+                )
+
+            connection.execute(sa_text("DROP TABLE negotiation_history"))
+            connection.execute(
+                sa_text("ALTER TABLE negotiation_history_new RENAME TO negotiation_history")
+            )
+
+        connection.execute(
+            sa_text(
+                "CREATE INDEX IF NOT EXISTS idx_negotiation_profile_resume "
+                "ON negotiation_history(profile_name, resume_id, applied_at DESC)"
+            )
+        )
+
 def log_to_db(level: str, source: str, message: str):
     if not engine:
         return
@@ -472,16 +565,38 @@ def log_to_db(level: str, source: str, message: str):
         connection.commit()
 
 def record_apply_action(
-        vacancy_id: str, profile_name: str, vacancy_title: str,
-        employer_name: str, status: str, reason: str | None):
+        vacancy_id: str,
+        profile_name: str,
+        resume_id: str | None,
+        resume_title: str | None,
+        vacancy_title: str,
+        employer_name: str,
+        status: str,
+        reason: str | None):
     values = {
-        "vacancy_id": vacancy_id, "profile_name": profile_name,
-        "vacancy_title": vacancy_title, "employer_name": employer_name,
-        "status": status, "reason": reason, "applied_at": datetime.now(),
+        "vacancy_id": vacancy_id,
+        "profile_name": profile_name,
+        "resume_id": str(resume_id or "").strip(),
+        "resume_title": (resume_title or "").strip(),
+        "vacancy_title": vacancy_title,
+        "employer_name": employer_name,
+        "status": status,
+        "reason": reason,
+        "applied_at": datetime.now(),
     }
     stmt = sqlite_insert(negotiation_history).values(**values)
     stmt = stmt.on_conflict_do_update(
-        index_elements=['vacancy_id'], set_=values)
+        index_elements=['vacancy_id', 'resume_id'],
+        set_={
+            "profile_name": values["profile_name"],
+            "resume_title": values["resume_title"],
+            "vacancy_title": values["vacancy_title"],
+            "employer_name": values["employer_name"],
+            "status": values["status"],
+            "reason": values["reason"],
+            "applied_at": values["applied_at"],
+        }
+    )
     with engine.connect() as connection:
         connection.execute(stmt)
         connection.commit()
@@ -491,6 +606,23 @@ def get_full_negotiation_history_for_profile(profile_name: str) -> list[dict]:
         stmt = select(negotiation_history).where(
             negotiation_history.c.profile_name == profile_name
         ).order_by(negotiation_history.c.applied_at.desc())
+        result = connection.execute(stmt).fetchall()
+        return [dict(row._mapping) for row in result]
+
+
+def get_negotiation_history_for_resume(
+        profile_name: str, resume_id: str
+) -> list[dict]:
+    if not engine:
+        return []
+    resume_key = str(resume_id or "").strip()
+    with engine.connect() as connection:
+        stmt = (
+            select(negotiation_history)
+            .where(negotiation_history.c.profile_name == profile_name)
+            .where(negotiation_history.c.resume_id == resume_key)
+            .order_by(negotiation_history.c.applied_at.desc())
+        )
         result = connection.execute(stmt).fetchall()
         return [dict(row._mapping) for row in result]
 
@@ -513,9 +645,12 @@ def upsert_negotiation_history(negotiations: list[dict], profile_name: str):
             vacancy = item.get('vacancy', {})
             if not vacancy or not vacancy.get('id'):
                 continue
+            resume_info = item.get("resume") or {}
             values = {
                 "vacancy_id": vacancy['id'],
                 "profile_name": profile_name,
+                "resume_id": str(resume_info.get("id") or "").strip(),
+                "resume_title": (resume_info.get("title") or "").strip(),
                 "vacancy_title": vacancy.get('name'),
                 "employer_name": vacancy.get('employer', {}).get('name'),
                 "status": item.get('state', {}).get('name', 'N/A'),
@@ -525,10 +660,14 @@ def upsert_negotiation_history(negotiations: list[dict], profile_name: str):
             }
             stmt = sqlite_insert(negotiation_history).values(**values)
             stmt = stmt.on_conflict_do_update(
-                index_elements=['vacancy_id'],
+                index_elements=['vacancy_id', 'resume_id'],
                 set_={
+                    "profile_name": values["profile_name"],
+                    "resume_title": values["resume_title"],
+                    "vacancy_title": values["vacancy_title"],
+                    "employer_name": values["employer_name"],
                     "status": values["status"],
-                    "applied_at": values["applied_at"]
+                    "applied_at": values["applied_at"],
                 }
             )
             connection.execute(stmt)

@@ -370,7 +370,8 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
 
 /* --- 6. Модальное подтверждение настроек --- */
 
-ConfigUnsavedChangesDialog {
+ConfigUnsavedChangesDialog,
+ApplyConfirmationDialog {
     layer: modal;
     align: center middle;
     background: rgba(0, 0, 0, 0.65);
@@ -381,13 +382,20 @@ ConfigUnsavedChangesDialog #config-confirm-center {
     height: 20%;
 }
 
-ConfigUnsavedChangesDialog #config-confirm-dialog {
+ApplyConfirmationDialog #config-confirm-center {
+    width: 30%;
+    height: 29%;
+}
+
+ConfigUnsavedChangesDialog #config-confirm-dialog,
+ApplyConfirmationDialog #config-confirm-dialog {
     border-title-color: $primary;
     background: $background2;
     border: round $primary;
 }
 
-ConfigUnsavedChangesDialog #config-confirm-dialog > .config-confirm__message {
+ConfigUnsavedChangesDialog #config-confirm-dialog > .config-confirm__message,
+ApplyConfirmationDialog #config-confirm-dialog > .config-confirm__message {
     color: $foreground3;
     text-style: bold;
     text-align: center;
@@ -396,16 +404,32 @@ ConfigUnsavedChangesDialog #config-confirm-dialog > .config-confirm__message {
     padding: 1 0;
 }
 
-ConfigUnsavedChangesDialog .config-confirm__buttons {
+ConfigUnsavedChangesDialog .config-confirm__buttons,
+ApplyConfirmationDialog .config-confirm__buttons {
     width: 100%;
     content-align-horizontal: center;
     align: center bottom;
     padding-bottom: 1;
 }
 
-ConfigUnsavedChangesDialog .config-confirm__buttons > Button {
+ConfigUnsavedChangesDialog .config-confirm__buttons > Button,
+ApplyConfirmationDialog .config-confirm__buttons > Button {
     min-width: 16;
     margin: 0 1;
+}
+
+ApplyConfirmationDialog #apply_confirm_input {
+    content-align: center middle;
+    width: 80%;
+    margin: 0 0 1 0;
+}
+
+ApplyConfirmationDialog #apply_confirm_error {
+    min-height: 2;
+    color: $red;
+    text-align: center;
+    content-align: center middle;
+    padding-bottom: 1;
 }
 
 

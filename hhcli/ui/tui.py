@@ -7,7 +7,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Center, Horizontal, Vertical, VerticalScroll
 from textual.events import Key, MouseDown
-from textual.screen import Screen
+from textual.screen import Screen, ModalScreen
 from textual.timer import Timer
 from textual.message import Message
 from textual.widgets import (
@@ -190,11 +190,11 @@ def _collect_delivered(
     return delivered_ids, delivered_keys, delivered_employers
 
 
-class ApplyConfirmationScreen(Screen):
-    """Экран подтверждения отправки откликов."""
+class ApplyConfirmationDialog(ModalScreen[str | None]):
+    """Модальное окно подтверждения отправки откликов."""
 
     BINDINGS = [
-        Binding("escape", "cancel", "Назад", show=True, key_display="Esc"),
+        Binding("escape", "cancel", "Отмена", show=True, key_display="Esc"),
     ]
 
     def __init__(self, count: int) -> None:
@@ -203,32 +203,55 @@ class ApplyConfirmationScreen(Screen):
         self.confirm_code = str(random.randint(1000, 9999))
 
     def compose(self) -> ComposeResult:
-        yield Center(
-            Static(
-                f"Выбрано [b]{self.count}[/] вакансий для отклика.\n\n"
-                f"Для подтверждения введите число [b green]"
-                f"{self.confirm_code}[/]",
-                id="confirm_label",
-            ),
-            Input(placeholder="Введите число здесь..."),
-            Static("", id="error_label"),
-        )
-        yield Footer()
+        with Center(id="config-confirm-center"):
+            with Vertical(id="config-confirm-dialog", classes="config-confirm") as dialog:
+                dialog.border_title = "Подтверждение"
+                dialog.styles.border_title_align = "left"
+                yield Static(
+                    "Если вы уверены, что хотите отправить отклики в выбранные компании, "
+                    f"введите число: [b green]{self.confirm_code}[/]",
+                    classes="config-confirm__message",
+                    expand=True,
+                )
+                yield Static("", id="apply_confirm_error")
+                yield Center(
+                    Input(
+                        placeholder="Введите число здесь...",
+                        id="apply_confirm_input",
+                    )
+                )
+                with Horizontal(classes="config-confirm__buttons"):
+                    yield Button("Отправить", id="confirm-submit", variant="success")
+                    yield Button("Сброс", id="confirm-reset", classes="decline")
+                    yield Button("Отмена", id="confirm-cancel")
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.value == self.confirm_code:
-            self.dismiss(True)
-            return
-        self.query_one("#error_label", Static).update(
-            "[b red]Неверное число. Попробуйте ещё раз.[/b red]"
-        )
-        event.input.value = ""
+        self._attempt_submit(event.value, event.input)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "confirm-submit":
+            input_widget = self.query_one("#apply_confirm_input", Input)
+            self._attempt_submit(input_widget.value, input_widget)
+        elif event.button.id == "confirm-reset":
+            self.dismiss("reset")
+        elif event.button.id == "confirm-cancel":
+            self.dismiss("cancel")
 
     def action_cancel(self) -> None:
-        self.dismiss(False)
+        self.dismiss("cancel")
+
+    def _attempt_submit(self, value: str, input_widget: Input) -> None:
+        if value.strip() == self.confirm_code:
+            self.dismiss("submit")
+            return
+        self.query_one("#apply_confirm_error", Static).update(
+            "[b red]Неверное число. Попробуйте ещё раз.[/b red]"
+        )
+        input_widget.value = ""
+        input_widget.focus()
 
 
 class VacancyListScreen(Screen):
@@ -669,7 +692,7 @@ class VacancyListScreen(Screen):
                 )
                 return
         self.app.push_screen(
-            ApplyConfirmationScreen(len(self.selected_vacancies)),
+            ApplyConfirmationDialog(len(self.selected_vacancies)),
             self.on_apply_confirmed
         )
 
@@ -685,9 +708,24 @@ class VacancyListScreen(Screen):
         self.app.notify("Обновление списка вакансий...", timeout=1.5)
         self._fetch_and_refresh_vacancies(self.current_page)
 
-    def on_apply_confirmed(self, ok: bool) -> None:
-        if not ok:
+    def on_apply_confirmed(self, decision: str | None) -> None:
+        selection_list = self.query_one(VacancySelectionList)
+        selection_list.focus()
+
+        if decision == "reset":
+            self.selected_vacancies.clear()
+            selection_list.deselect_all()
+            self._update_selected_from_list(selection_list)
+            self.app.notify("Выбор вакансий сброшен.", title="Сброс", severity="information")
+            self._fetch_and_refresh_vacancies(self.current_page)
             return
+
+        if decision != "submit":
+            return
+
+        if not self.selected_vacancies:
+            return
+
         self.app.notify(
             f"Отправка {len(self.selected_vacancies)} откликов...",
             title="В процессе", timeout=2

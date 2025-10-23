@@ -53,31 +53,32 @@ from .css_manager import CssManager
 from .widgets import Pagination
 
 CSS_MANAGER = CssManager()
+MAX_COLUMN_WIDTH = 200
 
 
 def _clamp(value: int, min_value: int, max_value: int) -> int:
     return max(min_value, min(max_value, value))
 
 
-def _percent_map_to_widths(
-    percent_map: dict[str, int],
+def _normalize_width_map(
+    width_map: dict[str, int],
     order: list[str],
-    total_chars: int = 100,
+    *,
+    max_value: int | None = None,
 ) -> dict[str, int]:
-    total_percent = sum(percent_map.get(key, 0) for key in order)
-    if total_percent <= 0:
-        total_percent = len(order)
-        percent_map = {key: 1 for key in order}
-    widths: dict[str, int] = {}
-    remaining = total_chars
-    for key in order[:-1]:
-        percent_value = percent_map.get(key, 0)
-        width = max(1, round(percent_value / total_percent * total_chars))
-        widths[key] = width
-        remaining -= width
-    last_key = order[-1]
-    widths[last_key] = max(1, remaining)
-    return widths
+    """Переводит сохранённые значения ширины в допустимые пределы."""
+    normalized: dict[str, int] = {}
+    for key in order:
+        raw = width_map.get(key, 0)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = 0
+        normalized_value = max(1, value)
+        if max_value is not None:
+            normalized_value = min(max_value, normalized_value)
+        normalized[key] = normalized_value
+    return normalized
 
 ERROR_REASON_MAP = {
     ApiErrorReason.APPLIED: "Отклик отправлен",
@@ -338,28 +339,16 @@ class VacancyListScreen(Screen):
         self.html_converter.mark_code = True
 
         defaults = get_default_config()
-        self._history_left_percent = defaults[ConfigKeys.HISTORY_LEFT_PANE_PERCENT]
-        self._history_column_percent = {
-            "index": defaults[ConfigKeys.HISTORY_COL_INDEX_PERCENT],
-            "title": defaults[ConfigKeys.HISTORY_COL_TITLE_PERCENT],
-            "company": defaults[ConfigKeys.HISTORY_COL_COMPANY_PERCENT],
-            "status": defaults[ConfigKeys.HISTORY_COL_STATUS_PERCENT],
-            "date": defaults[ConfigKeys.HISTORY_COL_DATE_PERCENT],
-        }
-        self._history_column_widths = _percent_map_to_widths(
-            self._history_column_percent, self.COLUMN_KEYS
-        )
-
-        defaults = get_default_config()
         self._vacancy_left_percent = defaults[ConfigKeys.VACANCY_LEFT_PANE_PERCENT]
-        self._vacancy_column_percent = {
-            "index": defaults[ConfigKeys.VACANCY_COL_INDEX_PERCENT],
-            "title": defaults[ConfigKeys.VACANCY_COL_TITLE_PERCENT],
-            "company": defaults[ConfigKeys.VACANCY_COL_COMPANY_PERCENT],
-            "previous": defaults[ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT],
-        }
-        self._vacancy_column_widths = _percent_map_to_widths(
-            self._vacancy_column_percent, self.COLUMN_KEYS
+        self._vacancy_column_widths = _normalize_width_map(
+            {
+                "index": defaults[ConfigKeys.VACANCY_COL_INDEX_WIDTH],
+                "title": defaults[ConfigKeys.VACANCY_COL_TITLE_WIDTH],
+                "company": defaults[ConfigKeys.VACANCY_COL_COMPANY_WIDTH],
+                "previous": defaults[ConfigKeys.VACANCY_COL_PREVIOUS_WIDTH],
+            },
+            self.COLUMN_KEYS,
+            max_value=MAX_COLUMN_WIDTH,
         )
 
     @staticmethod
@@ -389,30 +378,30 @@ class VacancyListScreen(Screen):
             10,
             90,
         )
-        self._vacancy_column_percent = {
+        vacancy_width_values = {
             "index": _clamp(
-                int(config.get(ConfigKeys.VACANCY_COL_INDEX_PERCENT, defaults[ConfigKeys.VACANCY_COL_INDEX_PERCENT])),
+                int(config.get(ConfigKeys.VACANCY_COL_INDEX_WIDTH, defaults[ConfigKeys.VACANCY_COL_INDEX_WIDTH])),
                 1,
-                100,
+                MAX_COLUMN_WIDTH,
             ),
             "title": _clamp(
-                int(config.get(ConfigKeys.VACANCY_COL_TITLE_PERCENT, defaults[ConfigKeys.VACANCY_COL_TITLE_PERCENT])),
+                int(config.get(ConfigKeys.VACANCY_COL_TITLE_WIDTH, defaults[ConfigKeys.VACANCY_COL_TITLE_WIDTH])),
                 1,
-                100,
+                MAX_COLUMN_WIDTH,
             ),
             "company": _clamp(
-                int(config.get(ConfigKeys.VACANCY_COL_COMPANY_PERCENT, defaults[ConfigKeys.VACANCY_COL_COMPANY_PERCENT])),
+                int(config.get(ConfigKeys.VACANCY_COL_COMPANY_WIDTH, defaults[ConfigKeys.VACANCY_COL_COMPANY_WIDTH])),
                 1,
-                100,
+                MAX_COLUMN_WIDTH,
             ),
             "previous": _clamp(
-                int(config.get(ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT, defaults[ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT])),
+                int(config.get(ConfigKeys.VACANCY_COL_PREVIOUS_WIDTH, defaults[ConfigKeys.VACANCY_COL_PREVIOUS_WIDTH])),
                 1,
-                100,
+                MAX_COLUMN_WIDTH,
             ),
         }
-        self._vacancy_column_widths = _percent_map_to_widths(
-            self._vacancy_column_percent, self.COLUMN_KEYS
+        self._vacancy_column_widths = _normalize_width_map(
+            vacancy_width_values, self.COLUMN_KEYS, max_value=MAX_COLUMN_WIDTH
         )
 
     def _apply_vacancy_workspace_widths(self) -> None:
@@ -1011,35 +1000,35 @@ class NegotiationHistoryScreen(Screen):
             10,
             90,
         )
-        self._history_column_percent = {
+        history_width_values = {
             "index": _clamp(
-                int(config.get(ConfigKeys.HISTORY_COL_INDEX_PERCENT, defaults[ConfigKeys.HISTORY_COL_INDEX_PERCENT])),
+                int(config.get(ConfigKeys.HISTORY_COL_INDEX_WIDTH, defaults[ConfigKeys.HISTORY_COL_INDEX_WIDTH])),
                 1,
-                100,
+                MAX_COLUMN_WIDTH,
             ),
             "title": _clamp(
-                int(config.get(ConfigKeys.HISTORY_COL_TITLE_PERCENT, defaults[ConfigKeys.HISTORY_COL_TITLE_PERCENT])),
+                int(config.get(ConfigKeys.HISTORY_COL_TITLE_WIDTH, defaults[ConfigKeys.HISTORY_COL_TITLE_WIDTH])),
                 1,
-                100,
+                MAX_COLUMN_WIDTH,
             ),
             "company": _clamp(
-                int(config.get(ConfigKeys.HISTORY_COL_COMPANY_PERCENT, defaults[ConfigKeys.HISTORY_COL_COMPANY_PERCENT])),
+                int(config.get(ConfigKeys.HISTORY_COL_COMPANY_WIDTH, defaults[ConfigKeys.HISTORY_COL_COMPANY_WIDTH])),
                 1,
-                100,
+                MAX_COLUMN_WIDTH,
             ),
             "status": _clamp(
-                int(config.get(ConfigKeys.HISTORY_COL_STATUS_PERCENT, defaults[ConfigKeys.HISTORY_COL_STATUS_PERCENT])),
+                int(config.get(ConfigKeys.HISTORY_COL_STATUS_WIDTH, defaults[ConfigKeys.HISTORY_COL_STATUS_WIDTH])),
                 1,
-                100,
+                MAX_COLUMN_WIDTH,
             ),
             "date": _clamp(
-                int(config.get(ConfigKeys.HISTORY_COL_DATE_PERCENT, defaults[ConfigKeys.HISTORY_COL_DATE_PERCENT])),
+                int(config.get(ConfigKeys.HISTORY_COL_DATE_WIDTH, defaults[ConfigKeys.HISTORY_COL_DATE_WIDTH])),
                 1,
-                100,
+                MAX_COLUMN_WIDTH,
             ),
         }
-        self._history_column_widths = _percent_map_to_widths(
-            self._history_column_percent, self.COLUMN_KEYS
+        self._history_column_widths = _normalize_width_map(
+            history_width_values, self.COLUMN_KEYS, max_value=MAX_COLUMN_WIDTH
         )
 
     def _apply_history_workspace_widths(self) -> None:

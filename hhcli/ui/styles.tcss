@@ -121,6 +121,13 @@ Footer > .footer--highlight-key {
     text-style: bold;
 }
 
+#history_list_header {
+    background: transparent;
+    color: $foreground2;
+    padding: 0 0 0 1;
+    text-style: bold;
+}
+
 
 /* --- 4. Виджеты для выбора (Списки и Таблицы) --- */
 

@@ -30,6 +30,8 @@ from ..database import (
 from ..reference_data import ensure_reference_data
 from ..constants import ConfigKeys, LogSource
 
+COLUMN_WIDTH_MAX = 200
+
 
 def _normalize(text: str | None) -> str:
     if not text:
@@ -331,24 +333,28 @@ class ConfigScreen(Screen):
                     max_value=90,
                 ),
                 LayoutField(
-                    "Колонка \"№\" (%)",
-                    "vacancy_col_index_percent",
-                    ConfigKeys.VACANCY_COL_INDEX_PERCENT,
+                    "Колонка \"№\" (симв.)",
+                    "vacancy_col_index_width",
+                    ConfigKeys.VACANCY_COL_INDEX_WIDTH,
+                    max_value=COLUMN_WIDTH_MAX,
                 ),
                 LayoutField(
-                    "Колонка \"Название\" (%)",
-                    "vacancy_col_title_percent",
-                    ConfigKeys.VACANCY_COL_TITLE_PERCENT,
+                    "Колонка \"Название\" (симв.)",
+                    "vacancy_col_title_width",
+                    ConfigKeys.VACANCY_COL_TITLE_WIDTH,
+                    max_value=COLUMN_WIDTH_MAX,
                 ),
                 LayoutField(
-                    "Колонка \"Компания\" (%)",
-                    "vacancy_col_company_percent",
-                    ConfigKeys.VACANCY_COL_COMPANY_PERCENT,
+                    "Колонка \"Компания\" (симв.)",
+                    "vacancy_col_company_width",
+                    ConfigKeys.VACANCY_COL_COMPANY_WIDTH,
+                    max_value=COLUMN_WIDTH_MAX,
                 ),
                 LayoutField(
-                    "Колонка \"Откликался\" (%)",
-                    "vacancy_col_previous_percent",
-                    ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT,
+                    "Колонка \"Откликался\" (симв.)",
+                    "vacancy_col_previous_width",
+                    ConfigKeys.VACANCY_COL_PREVIOUS_WIDTH,
+                    max_value=COLUMN_WIDTH_MAX,
                 ),
             ),
             "display-settings-group--vacancy",
@@ -364,29 +370,34 @@ class ConfigScreen(Screen):
                     max_value=90,
                 ),
                 LayoutField(
-                    "Колонка \"№\" (%)",
-                    "history_col_index_percent",
-                    ConfigKeys.HISTORY_COL_INDEX_PERCENT,
+                    "Колонка \"№\" (симв.)",
+                    "history_col_index_width",
+                    ConfigKeys.HISTORY_COL_INDEX_WIDTH,
+                    max_value=COLUMN_WIDTH_MAX,
                 ),
                 LayoutField(
-                    "Колонка \"Название\" (%)",
-                    "history_col_title_percent",
-                    ConfigKeys.HISTORY_COL_TITLE_PERCENT,
+                    "Колонка \"Название\" (симв.)",
+                    "history_col_title_width",
+                    ConfigKeys.HISTORY_COL_TITLE_WIDTH,
+                    max_value=COLUMN_WIDTH_MAX,
                 ),
                 LayoutField(
-                    "Колонка \"Компания\" (%)",
-                    "history_col_company_percent",
-                    ConfigKeys.HISTORY_COL_COMPANY_PERCENT,
+                    "Колонка \"Компания\" (симв.)",
+                    "history_col_company_width",
+                    ConfigKeys.HISTORY_COL_COMPANY_WIDTH,
+                    max_value=COLUMN_WIDTH_MAX,
                 ),
                 LayoutField(
-                    "Колонка \"Статус\" (%)",
-                    "history_col_status_percent",
-                    ConfigKeys.HISTORY_COL_STATUS_PERCENT,
+                    "Колонка \"Статус\" (симв.)",
+                    "history_col_status_width",
+                    ConfigKeys.HISTORY_COL_STATUS_WIDTH,
+                    max_value=COLUMN_WIDTH_MAX,
                 ),
                 LayoutField(
-                    "Колонка \"Дата отклика\" (%)",
-                    "history_col_date_percent",
-                    ConfigKeys.HISTORY_COL_DATE_PERCENT,
+                    "Колонка \"Дата отклика\" (симв.)",
+                    "history_col_date_width",
+                    ConfigKeys.HISTORY_COL_DATE_WIDTH,
+                    max_value=COLUMN_WIDTH_MAX,
                 ),
             ),
             "display-settings-group--history",
@@ -644,7 +655,7 @@ class ConfigScreen(Screen):
             classes="display-settings-row",
         )
 
-    def _parse_percent(
+    def _parse_int_value(
         self,
         selector: str,
         fallback: int,
@@ -667,9 +678,9 @@ class ConfigScreen(Screen):
         defaults = get_default_config()
         initial = getattr(self, "_initial_config", {})
 
-        def percent(selector: str, key: str, *, min_value: int = 1, max_value: int = 100) -> int:
+        def int_setting(selector: str, key: str, *, min_value: int = 1, max_value: int = 100) -> int:
             fallback = initial.get(key, defaults[key])
-            return self._parse_percent(selector, fallback, min_value=min_value, max_value=max_value)
+            return self._parse_int_value(selector, fallback, min_value=min_value, max_value=max_value)
 
         config_snapshot = {
             ConfigKeys.TEXT_INCLUDE: parse_list(self.query_one("#text_include", Input).value),
@@ -687,7 +698,7 @@ class ConfigScreen(Screen):
             ConfigKeys.THEME: self.query_one("#theme", Select).value or "hhcli-base",
         }
         for field in self.LAYOUT_FIELDS:
-            config_snapshot[field.config_key] = percent(
+            config_snapshot[field.config_key] = int_setting(
                 field.selector,
                 field.config_key,
                 min_value=field.min_value,

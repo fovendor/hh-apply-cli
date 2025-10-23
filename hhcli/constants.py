@@ -33,29 +33,29 @@ class ConfigKeys:
     STRIKETHROUGH_APPLIED_VAC_NAME = "strikethrough_applied_vac_name"
     THEME = "theme"
     VACANCY_LEFT_PANE_PERCENT = "vacancy_left_pane_percent"
-    VACANCY_COL_INDEX_PERCENT = "vacancy_col_index_percent"
-    VACANCY_COL_TITLE_PERCENT = "vacancy_col_title_percent"
-    VACANCY_COL_COMPANY_PERCENT = "vacancy_col_company_percent"
-    VACANCY_COL_PREVIOUS_PERCENT = "vacancy_col_previous_percent"
+    VACANCY_COL_INDEX_WIDTH = "vacancy_col_index_width"
+    VACANCY_COL_TITLE_WIDTH = "vacancy_col_title_width"
+    VACANCY_COL_COMPANY_WIDTH = "vacancy_col_company_width"
+    VACANCY_COL_PREVIOUS_WIDTH = "vacancy_col_previous_width"
     HISTORY_LEFT_PANE_PERCENT = "history_left_pane_percent"
-    HISTORY_COL_INDEX_PERCENT = "history_col_index_percent"
-    HISTORY_COL_TITLE_PERCENT = "history_col_title_percent"
-    HISTORY_COL_COMPANY_PERCENT = "history_col_company_percent"
-    HISTORY_COL_STATUS_PERCENT = "history_col_status_percent"
-    HISTORY_COL_DATE_PERCENT = "history_col_date_percent"
+    HISTORY_COL_INDEX_WIDTH = "history_col_index_width"
+    HISTORY_COL_TITLE_WIDTH = "history_col_title_width"
+    HISTORY_COL_COMPANY_WIDTH = "history_col_company_width"
+    HISTORY_COL_STATUS_WIDTH = "history_col_status_width"
+    HISTORY_COL_DATE_WIDTH = "history_col_date_width"
 
-LAYOUT_PERCENT_KEYS: tuple[str, ...] = (
+LAYOUT_WIDTH_KEYS: tuple[str, ...] = (
     ConfigKeys.VACANCY_LEFT_PANE_PERCENT,
-    ConfigKeys.VACANCY_COL_INDEX_PERCENT,
-    ConfigKeys.VACANCY_COL_TITLE_PERCENT,
-    ConfigKeys.VACANCY_COL_COMPANY_PERCENT,
-    ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT,
+    ConfigKeys.VACANCY_COL_INDEX_WIDTH,
+    ConfigKeys.VACANCY_COL_TITLE_WIDTH,
+    ConfigKeys.VACANCY_COL_COMPANY_WIDTH,
+    ConfigKeys.VACANCY_COL_PREVIOUS_WIDTH,
     ConfigKeys.HISTORY_LEFT_PANE_PERCENT,
-    ConfigKeys.HISTORY_COL_INDEX_PERCENT,
-    ConfigKeys.HISTORY_COL_TITLE_PERCENT,
-    ConfigKeys.HISTORY_COL_COMPANY_PERCENT,
-    ConfigKeys.HISTORY_COL_STATUS_PERCENT,
-    ConfigKeys.HISTORY_COL_DATE_PERCENT,
+    ConfigKeys.HISTORY_COL_INDEX_WIDTH,
+    ConfigKeys.HISTORY_COL_TITLE_WIDTH,
+    ConfigKeys.HISTORY_COL_COMPANY_WIDTH,
+    ConfigKeys.HISTORY_COL_STATUS_WIDTH,
+    ConfigKeys.HISTORY_COL_DATE_WIDTH,
 )
 
 class ApiErrorReason:

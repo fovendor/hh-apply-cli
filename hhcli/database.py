@@ -25,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from .constants import AppStateKeys, ConfigKeys, LogSource, LAYOUT_PERCENT_KEYS
+from .constants import AppStateKeys, ConfigKeys, LogSource, LAYOUT_WIDTH_KEYS
 
 APP_NAME = "hhcli"
 APP_AUTHOR = "fovendor"
@@ -74,16 +74,16 @@ def get_default_config() -> dict[str, Any]:
         ConfigKeys.STRIKETHROUGH_APPLIED_VAC_NAME: True,
         ConfigKeys.THEME: "hhcli-base",
         ConfigKeys.VACANCY_LEFT_PANE_PERCENT: 60,
-        ConfigKeys.VACANCY_COL_INDEX_PERCENT: 6,
-        ConfigKeys.VACANCY_COL_TITLE_PERCENT: 46,
-        ConfigKeys.VACANCY_COL_COMPANY_PERCENT: 28,
-        ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT: 20,
+        ConfigKeys.VACANCY_COL_INDEX_WIDTH: 6,
+        ConfigKeys.VACANCY_COL_TITLE_WIDTH: 46,
+        ConfigKeys.VACANCY_COL_COMPANY_WIDTH: 28,
+        ConfigKeys.VACANCY_COL_PREVIOUS_WIDTH: 20,
         ConfigKeys.HISTORY_LEFT_PANE_PERCENT: 55,
-        ConfigKeys.HISTORY_COL_INDEX_PERCENT: 6,
-        ConfigKeys.HISTORY_COL_TITLE_PERCENT: 38,
-        ConfigKeys.HISTORY_COL_COMPANY_PERCENT: 24,
-        ConfigKeys.HISTORY_COL_STATUS_PERCENT: 16,
-        ConfigKeys.HISTORY_COL_DATE_PERCENT: 16,
+        ConfigKeys.HISTORY_COL_INDEX_WIDTH: 6,
+        ConfigKeys.HISTORY_COL_TITLE_WIDTH: 38,
+        ConfigKeys.HISTORY_COL_COMPANY_WIDTH: 24,
+        ConfigKeys.HISTORY_COL_STATUS_WIDTH: 16,
+        ConfigKeys.HISTORY_COL_DATE_WIDTH: 16,
     }
 
 
@@ -116,16 +116,16 @@ profile_configs = Table(
     Column("strikethrough_applied_vac_name", Boolean, nullable=False,
            default=True),
     Column("vacancy_left_pane_percent", Integer, nullable=False, server_default="60"),
-    Column("vacancy_col_index_percent", Integer, nullable=False, server_default="6"),
-    Column("vacancy_col_title_percent", Integer, nullable=False, server_default="46"),
-    Column("vacancy_col_company_percent", Integer, nullable=False, server_default="28"),
-    Column("vacancy_col_previous_percent", Integer, nullable=False, server_default="20"),
+    Column("vacancy_col_index_width", Integer, nullable=False, server_default="6"),
+    Column("vacancy_col_title_width", Integer, nullable=False, server_default="46"),
+    Column("vacancy_col_company_width", Integer, nullable=False, server_default="28"),
+    Column("vacancy_col_previous_width", Integer, nullable=False, server_default="20"),
     Column("history_left_pane_percent", Integer, nullable=False, server_default="55"),
-    Column("history_col_index_percent", Integer, nullable=False, server_default="6"),
-    Column("history_col_title_percent", Integer, nullable=False, server_default="38"),
-    Column("history_col_company_percent", Integer, nullable=False, server_default="24"),
-    Column("history_col_status_percent", Integer, nullable=False, server_default="16"),
-    Column("history_col_date_percent", Integer, nullable=False, server_default="16"),
+    Column("history_col_index_width", Integer, nullable=False, server_default="6"),
+    Column("history_col_title_width", Integer, nullable=False, server_default="38"),
+    Column("history_col_company_width", Integer, nullable=False, server_default="24"),
+    Column("history_col_status_width", Integer, nullable=False, server_default="16"),
+    Column("history_col_date_width", Integer, nullable=False, server_default="16"),
 )
 
 config_negative_keywords = Table(
@@ -492,21 +492,25 @@ def ensure_schema_upgrades() -> None:
             )
             columns.add("theme")
 
-        layout_columns = [
+        percent_columns = [
             ("vacancy_left_pane_percent", defaults[ConfigKeys.VACANCY_LEFT_PANE_PERCENT]),
-            ("vacancy_col_index_percent", defaults[ConfigKeys.VACANCY_COL_INDEX_PERCENT]),
-            ("vacancy_col_title_percent", defaults[ConfigKeys.VACANCY_COL_TITLE_PERCENT]),
-            ("vacancy_col_company_percent", defaults[ConfigKeys.VACANCY_COL_COMPANY_PERCENT]),
-            ("vacancy_col_previous_percent", defaults[ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT]),
             ("history_left_pane_percent", defaults[ConfigKeys.HISTORY_LEFT_PANE_PERCENT]),
-            ("history_col_index_percent", defaults[ConfigKeys.HISTORY_COL_INDEX_PERCENT]),
-            ("history_col_title_percent", defaults[ConfigKeys.HISTORY_COL_TITLE_PERCENT]),
-            ("history_col_company_percent", defaults[ConfigKeys.HISTORY_COL_COMPANY_PERCENT]),
-            ("history_col_status_percent", defaults[ConfigKeys.HISTORY_COL_STATUS_PERCENT]),
-            ("history_col_date_percent", defaults[ConfigKeys.HISTORY_COL_DATE_PERCENT]),
+        ]
+        width_columns = [
+            ("vacancy_col_index_width", defaults[ConfigKeys.VACANCY_COL_INDEX_WIDTH]),
+            ("vacancy_col_title_width", defaults[ConfigKeys.VACANCY_COL_TITLE_WIDTH]),
+            ("vacancy_col_company_width", defaults[ConfigKeys.VACANCY_COL_COMPANY_WIDTH]),
+            ("vacancy_col_previous_width", defaults[ConfigKeys.VACANCY_COL_PREVIOUS_WIDTH]),
+            ("history_col_index_width", defaults[ConfigKeys.HISTORY_COL_INDEX_WIDTH]),
+            ("history_col_title_width", defaults[ConfigKeys.HISTORY_COL_TITLE_WIDTH]),
+            ("history_col_company_width", defaults[ConfigKeys.HISTORY_COL_COMPANY_WIDTH]),
+            ("history_col_status_width", defaults[ConfigKeys.HISTORY_COL_STATUS_WIDTH]),
+            ("history_col_date_width", defaults[ConfigKeys.HISTORY_COL_DATE_WIDTH]),
         ]
 
-        for column_name, default_value in layout_columns:
+        added_columns: set[str] = set()
+        combined_columns = percent_columns + width_columns
+        for column_name, default_value in combined_columns:
             if column_name not in columns:
                 connection.execute(
                     sa_text(f"ALTER TABLE profile_configs ADD COLUMN {column_name} INTEGER")
@@ -518,6 +522,118 @@ def ensure_schema_upgrades() -> None:
                     {"value": default_value},
                 )
                 columns.add(column_name)
+                added_columns.add(column_name)
+
+        added_width_columns = {name for name, _ in width_columns if name in added_columns}
+
+        if added_width_columns:
+            percent_to_width_map = {
+                "vacancy_col_index_percent": "vacancy_col_index_width",
+                "vacancy_col_title_percent": "vacancy_col_title_width",
+                "vacancy_col_company_percent": "vacancy_col_company_width",
+                "vacancy_col_previous_percent": "vacancy_col_previous_width",
+                "history_col_index_percent": "history_col_index_width",
+                "history_col_title_percent": "history_col_title_width",
+                "history_col_company_percent": "history_col_company_width",
+                "history_col_status_percent": "history_col_status_width",
+                "history_col_date_percent": "history_col_date_width",
+            }
+            present_percent_columns = [
+                name for name in percent_to_width_map if name in columns
+            ]
+            if present_percent_columns:
+                order_vacancy = [
+                    "vacancy_col_index_percent",
+                    "vacancy_col_title_percent",
+                    "vacancy_col_company_percent",
+                    "vacancy_col_previous_percent",
+                ]
+                order_history = [
+                    "history_col_index_percent",
+                    "history_col_title_percent",
+                    "history_col_company_percent",
+                    "history_col_status_percent",
+                    "history_col_date_percent",
+                ]
+
+                def _convert(percent_values: dict[str, int], keys: list[str]) -> dict[str, int]:
+                    active_keys = [key for key in keys if key in percent_values]
+                    if not active_keys:
+                        return {}
+                    total = sum(int(percent_values.get(key, 0) or 0) for key in active_keys)
+                    if total <= 0:
+                        total = len(active_keys)
+                        percent_values = {key: 1 for key in active_keys}
+                    widths: dict[str, int] = {}
+                    remaining = 100
+                    for key in active_keys[:-1]:
+                        percent = int(percent_values.get(key, 0) or 0)
+                        width = max(1, round(percent / total * 100))
+                        widths[key] = width
+                        remaining -= width
+                    last_key = active_keys[-1]
+                    widths[last_key] = max(1, remaining)
+                    return widths
+
+                select_columns_list = ["profile_name", *present_percent_columns]
+                select_columns = ", ".join(select_columns_list)
+                rows = connection.execute(
+                    sa_text(f"SELECT {select_columns} FROM profile_configs")
+                ).fetchall()
+                for row in rows:
+                    data = dict(row._mapping)
+                    vacancy_percent_values = {key: data.get(key) for key in order_vacancy if key in data}
+                    history_percent_values = {key: data.get(key) for key in order_history if key in data}
+                    vacancy_widths = _convert(vacancy_percent_values, order_vacancy)
+                    history_widths = _convert(history_percent_values, order_history)
+                    params = {
+                        "profile_name": data["profile_name"],
+                        "vacancy_col_index_width": vacancy_widths.get(
+                            "vacancy_col_index_percent", defaults[ConfigKeys.VACANCY_COL_INDEX_WIDTH]
+                        ),
+                        "vacancy_col_title_width": vacancy_widths.get(
+                            "vacancy_col_title_percent", defaults[ConfigKeys.VACANCY_COL_TITLE_WIDTH]
+                        ),
+                        "vacancy_col_company_width": vacancy_widths.get(
+                            "vacancy_col_company_percent", defaults[ConfigKeys.VACANCY_COL_COMPANY_WIDTH]
+                        ),
+                        "vacancy_col_previous_width": vacancy_widths.get(
+                            "vacancy_col_previous_percent", defaults[ConfigKeys.VACANCY_COL_PREVIOUS_WIDTH]
+                        ),
+                        "history_col_index_width": history_widths.get(
+                            "history_col_index_percent", defaults[ConfigKeys.HISTORY_COL_INDEX_WIDTH]
+                        ),
+                        "history_col_title_width": history_widths.get(
+                            "history_col_title_percent", defaults[ConfigKeys.HISTORY_COL_TITLE_WIDTH]
+                        ),
+                        "history_col_company_width": history_widths.get(
+                            "history_col_company_percent", defaults[ConfigKeys.HISTORY_COL_COMPANY_WIDTH]
+                        ),
+                        "history_col_status_width": history_widths.get(
+                            "history_col_status_percent", defaults[ConfigKeys.HISTORY_COL_STATUS_WIDTH]
+                        ),
+                        "history_col_date_width": history_widths.get(
+                            "history_col_date_percent", defaults[ConfigKeys.HISTORY_COL_DATE_WIDTH]
+                        ),
+                    }
+                    connection.execute(
+                        sa_text(
+                            """
+UPDATE profile_configs
+SET vacancy_col_index_width = :vacancy_col_index_width,
+    vacancy_col_title_width = :vacancy_col_title_width,
+    vacancy_col_company_width = :vacancy_col_company_width,
+    vacancy_col_previous_width = :vacancy_col_previous_width,
+    history_col_index_width = :history_col_index_width,
+    history_col_title_width = :history_col_title_width,
+    history_col_company_width = :history_col_company_width,
+    history_col_status_width = :history_col_status_width,
+    history_col_date_width = :history_col_date_width
+WHERE profile_name = :profile_name
+"""
+                        ),
+                        params,
+                    )
 
         history_info = list(
             connection.execute(sa_text("PRAGMA table_info(negotiation_history)"))
@@ -819,7 +935,7 @@ def load_profile_config(profile_name: str) -> dict:
         config = dict(result._mapping)
         defaults = get_default_config()
         config.setdefault(ConfigKeys.THEME, defaults[ConfigKeys.THEME])
-        for key in LAYOUT_PERCENT_KEYS:
+        for key in LAYOUT_WIDTH_KEYS:
             config.setdefault(key, defaults[key])
 
         stmt_pos_keywords = select(config_positive_keywords.c.keyword).where(

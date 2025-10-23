@@ -330,8 +330,7 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
     margin: 1 0;
 }
 
-.picker-group,
-.layout-settings__group {
+.picker-group {
     height: auto;
     padding: 0 1 1 1;
     border: round $background3;
@@ -377,49 +376,52 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
 
 /* Настройки отображения экранов */
 
-.layout-settings {
-    layout: horizontal;
+#display-settings-container {
+    height: 22;
+    layout: grid;
     grid-size: 2;
-    grid-gutter-horizontal: 2;
-    height: auto;
+    grid-columns: 1fr 1fr;
+    grid-gutter: 0 2;
     margin: 1 0;
 }
 
-.layout-settings__group {
-    layout: vertical;
-    content-align: left top;
-    height: auto;
-    padding-top: 1;
-    border-title-align: left;
+.display-settings-group {
+    height: 26;
+    padding: 1;
+    border: round $background3;
     border-title-color: $foreground1;
     border-title-background: $background3;
-}
-
-.layout-settings__row {
-    layout: horizontal;
-    align: left middle;
-    margin-bottom: 1;
-    padding: 0 1 0 0;
-}
-
-.layout-settings__label {
     width: 1fr;
-    color: $foreground1;
-    padding-right: 1;
+    background: $background2;
 }
 
-.layout-settings__input {
+.display-settings-row {
+    layout: horizontal;
+    grid-gutter-horizontal: 2;
+
+    height: 3;
+    align: left middle;
+}
+
+.display-settings-label {
+    width: 1fr;
+    height: 100%;
+    color: $foreground1;
+    content-align: left middle;
+}
+
+.display-settings-input {
     width: 12;
     background: $background2;
     border: round $background3;
     text-align: right;
     color: $foreground3;
+    margin: 0;
 }
 
-.layout-settings__input:focus {
+.display-settings-input:focus {
     border: round $primary;
 }
-
 
 /* --- 6. Модальное подтверждение настроек --- */
 

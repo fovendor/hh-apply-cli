@@ -351,7 +351,7 @@ class ConfigScreen(Screen):
                     ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT,
                 ),
             ),
-            "layout-settings__group-vacancy",
+            "display-settings-group--vacancy",
         ),
         LayoutSectionDef(
             "Экран истории откликов",
@@ -389,7 +389,7 @@ class ConfigScreen(Screen):
                     ConfigKeys.HISTORY_COL_DATE_PERCENT,
                 ),
             ),
-            "layout-settings__group-history",
+            "display-settings-group--history",
         ),
     )
 
@@ -473,9 +473,9 @@ class ConfigScreen(Screen):
                 yield Select([], id="theme")
 
                 yield Static("Настройки отображения экранов", classes="header")
-                with Horizontal(id="layout_settings_container", classes="layout-settings"):
+                with Horizontal(id="display-settings-container", classes="display-settings-grid"):
                     for section in self.LAYOUT_SECTIONS:
-                        with Vertical(classes=f"layout-settings__group {section.css_class}") as group:
+                        with Vertical(classes=f"display-settings-group {section.css_class}") as group:
                             group.border_title = section.title
                             group.styles.border_title_align = "left"
                             for field in section.fields:
@@ -639,9 +639,9 @@ class ConfigScreen(Screen):
 
     def _make_layout_row(self, label_text: str, input_id: str) -> Horizontal:
         return Horizontal(
-            Label(label_text, classes="layout-settings__label"),
-            Input(id=input_id, classes="layout-settings__input"),
-            classes="layout-settings__row",
+            Label(label_text, classes="display-settings-label"),
+            Input(id=input_id, classes="display-settings-input"),
+            classes="display-settings-row",
         )
 
     def _parse_percent(

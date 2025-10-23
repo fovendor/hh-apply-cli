@@ -300,6 +300,7 @@ class VacancyListScreen(Screen):
         Binding("escape", "app.pop_screen", "Назад"),
         Binding("_", "toggle_select", "Выбор", show=True, key_display="Space"),
         Binding("a", "apply_for_selected", "Откликнуться"),
+        Binding("ф", "apply_for_selected", "Откликнуться (RU)", show=False),
         Binding("h", "open_history", "История", show=True),
         Binding("р", "open_history", "История (RU)", show=False),
         Binding("c", "edit_config", "Настройки", show=True),

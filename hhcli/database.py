@@ -25,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from .constants import AppStateKeys, ConfigKeys, LogSource
+from .constants import AppStateKeys, ConfigKeys, LogSource, LAYOUT_PERCENT_KEYS
 
 APP_NAME = "hhcli"
 APP_AUTHOR = "fovendor"
@@ -73,6 +73,17 @@ def get_default_config() -> dict[str, Any]:
         ConfigKeys.STRIKETHROUGH_APPLIED_VAC: True,
         ConfigKeys.STRIKETHROUGH_APPLIED_VAC_NAME: True,
         ConfigKeys.THEME: "hhcli-base",
+        ConfigKeys.VACANCY_LEFT_PANE_PERCENT: 60,
+        ConfigKeys.VACANCY_COL_INDEX_PERCENT: 6,
+        ConfigKeys.VACANCY_COL_TITLE_PERCENT: 46,
+        ConfigKeys.VACANCY_COL_COMPANY_PERCENT: 28,
+        ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT: 20,
+        ConfigKeys.HISTORY_LEFT_PANE_PERCENT: 55,
+        ConfigKeys.HISTORY_COL_INDEX_PERCENT: 6,
+        ConfigKeys.HISTORY_COL_TITLE_PERCENT: 38,
+        ConfigKeys.HISTORY_COL_COMPANY_PERCENT: 24,
+        ConfigKeys.HISTORY_COL_STATUS_PERCENT: 16,
+        ConfigKeys.HISTORY_COL_DATE_PERCENT: 16,
     }
 
 
@@ -104,6 +115,17 @@ profile_configs = Table(
     Column("strikethrough_applied_vac", Boolean, nullable=False, default=True),
     Column("strikethrough_applied_vac_name", Boolean, nullable=False,
            default=True),
+    Column("vacancy_left_pane_percent", Integer, nullable=False, server_default="60"),
+    Column("vacancy_col_index_percent", Integer, nullable=False, server_default="6"),
+    Column("vacancy_col_title_percent", Integer, nullable=False, server_default="46"),
+    Column("vacancy_col_company_percent", Integer, nullable=False, server_default="28"),
+    Column("vacancy_col_previous_percent", Integer, nullable=False, server_default="20"),
+    Column("history_left_pane_percent", Integer, nullable=False, server_default="55"),
+    Column("history_col_index_percent", Integer, nullable=False, server_default="6"),
+    Column("history_col_title_percent", Integer, nullable=False, server_default="38"),
+    Column("history_col_company_percent", Integer, nullable=False, server_default="24"),
+    Column("history_col_status_percent", Integer, nullable=False, server_default="16"),
+    Column("history_col_date_percent", Integer, nullable=False, server_default="16"),
 )
 
 config_negative_keywords = Table(
@@ -452,7 +474,8 @@ def ensure_schema_upgrades() -> None:
     if not engine:
         return
 
-    default_theme = get_default_config()[ConfigKeys.THEME]
+    defaults = get_default_config()
+    default_theme = defaults[ConfigKeys.THEME]
 
     with engine.begin() as connection:
         columns = {
@@ -467,6 +490,34 @@ def ensure_schema_upgrades() -> None:
                 sa_text("UPDATE profile_configs SET theme = :theme WHERE theme IS NULL"),
                 {"theme": default_theme},
             )
+            columns.add("theme")
+
+        layout_columns = [
+            ("vacancy_left_pane_percent", defaults[ConfigKeys.VACANCY_LEFT_PANE_PERCENT]),
+            ("vacancy_col_index_percent", defaults[ConfigKeys.VACANCY_COL_INDEX_PERCENT]),
+            ("vacancy_col_title_percent", defaults[ConfigKeys.VACANCY_COL_TITLE_PERCENT]),
+            ("vacancy_col_company_percent", defaults[ConfigKeys.VACANCY_COL_COMPANY_PERCENT]),
+            ("vacancy_col_previous_percent", defaults[ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT]),
+            ("history_left_pane_percent", defaults[ConfigKeys.HISTORY_LEFT_PANE_PERCENT]),
+            ("history_col_index_percent", defaults[ConfigKeys.HISTORY_COL_INDEX_PERCENT]),
+            ("history_col_title_percent", defaults[ConfigKeys.HISTORY_COL_TITLE_PERCENT]),
+            ("history_col_company_percent", defaults[ConfigKeys.HISTORY_COL_COMPANY_PERCENT]),
+            ("history_col_status_percent", defaults[ConfigKeys.HISTORY_COL_STATUS_PERCENT]),
+            ("history_col_date_percent", defaults[ConfigKeys.HISTORY_COL_DATE_PERCENT]),
+        ]
+
+        for column_name, default_value in layout_columns:
+            if column_name not in columns:
+                connection.execute(
+                    sa_text(f"ALTER TABLE profile_configs ADD COLUMN {column_name} INTEGER")
+                )
+                connection.execute(
+                    sa_text(
+                        f"UPDATE profile_configs SET {column_name} = :value WHERE {column_name} IS NULL"
+                    ),
+                    {"value": default_value},
+                )
+                columns.add(column_name)
 
         history_info = list(
             connection.execute(sa_text("PRAGMA table_info(negotiation_history)"))
@@ -768,6 +819,8 @@ def load_profile_config(profile_name: str) -> dict:
         config = dict(result._mapping)
         defaults = get_default_config()
         config.setdefault(ConfigKeys.THEME, defaults[ConfigKeys.THEME])
+        for key in LAYOUT_PERCENT_KEYS:
+            config.setdefault(key, defaults[key])
 
         stmt_pos_keywords = select(config_positive_keywords.c.keyword).where(
             config_positive_keywords.c.profile_name == profile_name)

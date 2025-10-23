@@ -330,11 +330,13 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
     margin: 1 0;
 }
 
-.picker-group {
+.picker-group,
+.layout-settings__group {
     height: auto;
     padding: 0 1 1 1;
     border: round $background3;
     width: 1fr;
+    background: $background2;
 }
 
 .picker-group .summary-label {
@@ -371,6 +373,51 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
 .picker__hint {
     color: $foreground2;
     padding-top: 1;
+}
+
+/* Настройки отображения экранов */
+
+.layout-settings {
+    layout: horizontal;
+    grid-size: 2;
+    grid-gutter-horizontal: 2;
+    height: auto;
+    margin: 1 0;
+}
+
+.layout-settings__group {
+    layout: vertical;
+    content-align: left top;
+    height: auto;
+    padding-top: 1;
+    border-title-align: left;
+    border-title-color: $foreground1;
+    border-title-background: $background3;
+}
+
+.layout-settings__row {
+    layout: horizontal;
+    align: left middle;
+    margin-bottom: 1;
+    padding: 0 1 0 0;
+}
+
+.layout-settings__label {
+    width: 1fr;
+    color: $foreground1;
+    padding-right: 1;
+}
+
+.layout-settings__input {
+    width: 12;
+    background: $background2;
+    border: round $background3;
+    text-align: right;
+    color: $foreground3;
+}
+
+.layout-settings__input:focus {
+    border: round $primary;
 }
 
 

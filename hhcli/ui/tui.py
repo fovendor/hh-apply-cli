@@ -29,6 +29,7 @@ from rich.text import Text
 from ..database import (
     get_full_negotiation_history_for_profile,
     get_negotiation_history_for_resume,
+    get_default_config,
     load_profile_config,
     log_to_db,
     record_apply_action,
@@ -52,6 +53,31 @@ from .css_manager import CssManager
 from .widgets import Pagination
 
 CSS_MANAGER = CssManager()
+
+
+def _clamp(value: int, min_value: int, max_value: int) -> int:
+    return max(min_value, min(max_value, value))
+
+
+def _percent_map_to_widths(
+    percent_map: dict[str, int],
+    order: list[str],
+    total_chars: int = 100,
+) -> dict[str, int]:
+    total_percent = sum(percent_map.get(key, 0) for key in order)
+    if total_percent <= 0:
+        total_percent = len(order)
+        percent_map = {key: 1 for key in order}
+    widths: dict[str, int] = {}
+    remaining = total_chars
+    for key in order[:-1]:
+        percent_value = percent_map.get(key, 0)
+        width = max(1, round(percent_value / total_percent * total_chars))
+        widths[key] = width
+        remaining -= width
+    last_key = order[-1]
+    widths[last_key] = max(1, remaining)
+    return widths
 
 ERROR_REASON_MAP = {
     ApiErrorReason.APPLIED: "Отклик отправлен",
@@ -282,11 +308,8 @@ class VacancyListScreen(Screen):
     ]
     _debounce_timer: Optional[Timer] = None
 
-    ID_WIDTH = 5
-    TITLE_WIDTH = 40
-    COMPANY_WIDTH = 24
-    PREVIOUS_WIDTH = 10
     PER_PAGE = 50
+    COLUMN_KEYS = ["index", "title", "company", "previous"]
 
     def __init__(
         self,
@@ -314,6 +337,31 @@ class VacancyListScreen(Screen):
         self.html_converter.ignore_images = True
         self.html_converter.mark_code = True
 
+        defaults = get_default_config()
+        self._history_left_percent = defaults[ConfigKeys.HISTORY_LEFT_PANE_PERCENT]
+        self._history_column_percent = {
+            "index": defaults[ConfigKeys.HISTORY_COL_INDEX_PERCENT],
+            "title": defaults[ConfigKeys.HISTORY_COL_TITLE_PERCENT],
+            "company": defaults[ConfigKeys.HISTORY_COL_COMPANY_PERCENT],
+            "status": defaults[ConfigKeys.HISTORY_COL_STATUS_PERCENT],
+            "date": defaults[ConfigKeys.HISTORY_COL_DATE_PERCENT],
+        }
+        self._history_column_widths = _percent_map_to_widths(
+            self._history_column_percent, self.COLUMN_KEYS
+        )
+
+        defaults = get_default_config()
+        self._vacancy_left_percent = defaults[ConfigKeys.VACANCY_LEFT_PANE_PERCENT]
+        self._vacancy_column_percent = {
+            "index": defaults[ConfigKeys.VACANCY_COL_INDEX_PERCENT],
+            "title": defaults[ConfigKeys.VACANCY_COL_TITLE_PERCENT],
+            "company": defaults[ConfigKeys.VACANCY_COL_COMPANY_PERCENT],
+            "previous": defaults[ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT],
+        }
+        self._vacancy_column_widths = _percent_map_to_widths(
+            self._vacancy_column_percent, self.COLUMN_KEYS
+        )
+
     @staticmethod
     def _format_segment(
         content: str | None,
@@ -332,6 +380,68 @@ class VacancyListScreen(Screen):
         if padding:
             segment.append(" " * padding)
         return segment
+
+    def _reload_vacancy_layout_preferences(self) -> None:
+        config = load_profile_config(self.app.client.profile_name)
+        defaults = get_default_config()
+        self._vacancy_left_percent = _clamp(
+            int(config.get(ConfigKeys.VACANCY_LEFT_PANE_PERCENT, defaults[ConfigKeys.VACANCY_LEFT_PANE_PERCENT])),
+            10,
+            90,
+        )
+        self._vacancy_column_percent = {
+            "index": _clamp(
+                int(config.get(ConfigKeys.VACANCY_COL_INDEX_PERCENT, defaults[ConfigKeys.VACANCY_COL_INDEX_PERCENT])),
+                1,
+                100,
+            ),
+            "title": _clamp(
+                int(config.get(ConfigKeys.VACANCY_COL_TITLE_PERCENT, defaults[ConfigKeys.VACANCY_COL_TITLE_PERCENT])),
+                1,
+                100,
+            ),
+            "company": _clamp(
+                int(config.get(ConfigKeys.VACANCY_COL_COMPANY_PERCENT, defaults[ConfigKeys.VACANCY_COL_COMPANY_PERCENT])),
+                1,
+                100,
+            ),
+            "previous": _clamp(
+                int(config.get(ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT, defaults[ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT])),
+                1,
+                100,
+            ),
+        }
+        self._vacancy_column_widths = _percent_map_to_widths(
+            self._vacancy_column_percent, self.COLUMN_KEYS
+        )
+
+    def _apply_vacancy_workspace_widths(self) -> None:
+        try:
+            vacancy_panel = self.query_one("#vacancy_panel")
+            details_panel = self.query_one("#details_panel")
+        except Exception:
+            return
+        vacancy_panel.styles.width = f"{self._vacancy_left_percent}%"
+        right_percent = max(5, 100 - self._vacancy_left_percent)
+        details_panel.styles.width = f"{right_percent}%"
+
+    def _update_vacancy_header(self) -> None:
+        try:
+            header = self.query_one("#vacancy_list_header", Static)
+        except Exception:
+            return
+        header.update(
+            self._build_row_text(
+                index="№",
+                title="Название вакансии",
+                company="Компания",
+                previous="Откликался",
+                index_style="bold",
+                title_style="bold",
+                company_style="bold",
+                previous_style="bold",
+            )
+        )
 
     @staticmethod
     def _selection_values(options: Iterable[Selection | str]) -> set[str]:
@@ -361,25 +471,26 @@ class VacancyListScreen(Screen):
         previous_style: str | None = None,
     ) -> Text:
         strike_style = "#8c8c8c" if strike else None
+        widths = self._vacancy_column_widths
 
         index_segment = self._format_segment(
-            index, self.ID_WIDTH, style=index_style
+            index, widths["index"], style=index_style
         )
         title_segment = self._format_segment(
             title,
-            self.TITLE_WIDTH,
+            widths["title"],
             style=strike_style or title_style,
             strike=strike,
         )
         company_segment = self._format_segment(
             company,
-            self.COMPANY_WIDTH,
+            widths["company"],
             style=strike_style or company_style,
             strike=strike,
         )
         previous_segment = self._format_segment(
             previous,
-            self.PREVIOUS_WIDTH,
+            widths["previous"],
             style=strike_style or previous_style,
             strike=strike,
         )
@@ -421,19 +532,9 @@ class VacancyListScreen(Screen):
             yield Footer()
 
     def on_mount(self) -> None:
-        header = self.query_one("#vacancy_list_header", Static)
-        header.update(
-            self._build_row_text(
-                index="№",
-                title="Название вакансии",
-                company="Компания",
-                previous="Откликался",
-                index_style="bold",
-                title_style="bold",
-                company_style="bold",
-                previous_style="bold",
-            )
-        )
+        self._reload_vacancy_layout_preferences()
+        self._apply_vacancy_workspace_widths()
+        self._update_vacancy_header()
         self._fetch_and_refresh_vacancies(page=0)
 
     def on_screen_resume(self) -> None:
@@ -443,6 +544,9 @@ class VacancyListScreen(Screen):
     def _fetch_and_refresh_vacancies(self, page: int) -> None:
         """Запускает воркер для загрузки вакансий и обновления UI."""
         self.current_page = page
+        self._reload_vacancy_layout_preferences()
+        self._apply_vacancy_workspace_widths()
+        self._update_vacancy_header()
         self.query_one(LoadingIndicator).display = True
         self.query_one(VacancySelectionList).clear_options()
         self.query_one(VacancySelectionList).add_option(
@@ -845,11 +949,7 @@ class NegotiationHistoryScreen(Screen):
         Binding("с", "edit_config", "Настройки (RU)", show=False),
     ]
 
-    ID_WIDTH = 5
-    TITLE_WIDTH = 40
-    COMPANY_WIDTH = 24
-    DATE_WIDTH = 20
-    STATUS_WIDTH = 18
+    COLUMN_KEYS = ["index", "title", "company", "status", "date"]
 
     def __init__(self, resume_id: str, resume_title: str | None = None) -> None:
         super().__init__()
@@ -892,12 +992,75 @@ class NegotiationHistoryScreen(Screen):
             yield Footer()
 
     def on_mount(self) -> None:
+        self._reload_history_layout_preferences()
+        self._apply_history_workspace_widths()
+        self._update_history_header()
         self._refresh_history()
 
     def on_screen_resume(self) -> None:
+        self._reload_history_layout_preferences()
+        self._apply_history_workspace_widths()
+        self._update_history_header()
         self.query_one(HistoryOptionList).focus()
 
+    def _reload_history_layout_preferences(self) -> None:
+        config = load_profile_config(self.app.client.profile_name)
+        defaults = get_default_config()
+        self._history_left_percent = _clamp(
+            int(config.get(ConfigKeys.HISTORY_LEFT_PANE_PERCENT, defaults[ConfigKeys.HISTORY_LEFT_PANE_PERCENT])),
+            10,
+            90,
+        )
+        self._history_column_percent = {
+            "index": _clamp(
+                int(config.get(ConfigKeys.HISTORY_COL_INDEX_PERCENT, defaults[ConfigKeys.HISTORY_COL_INDEX_PERCENT])),
+                1,
+                100,
+            ),
+            "title": _clamp(
+                int(config.get(ConfigKeys.HISTORY_COL_TITLE_PERCENT, defaults[ConfigKeys.HISTORY_COL_TITLE_PERCENT])),
+                1,
+                100,
+            ),
+            "company": _clamp(
+                int(config.get(ConfigKeys.HISTORY_COL_COMPANY_PERCENT, defaults[ConfigKeys.HISTORY_COL_COMPANY_PERCENT])),
+                1,
+                100,
+            ),
+            "status": _clamp(
+                int(config.get(ConfigKeys.HISTORY_COL_STATUS_PERCENT, defaults[ConfigKeys.HISTORY_COL_STATUS_PERCENT])),
+                1,
+                100,
+            ),
+            "date": _clamp(
+                int(config.get(ConfigKeys.HISTORY_COL_DATE_PERCENT, defaults[ConfigKeys.HISTORY_COL_DATE_PERCENT])),
+                1,
+                100,
+            ),
+        }
+        self._history_column_widths = _percent_map_to_widths(
+            self._history_column_percent, self.COLUMN_KEYS
+        )
+
+    def _apply_history_workspace_widths(self) -> None:
+        try:
+            history_panel = self.query_one("#history_panel")
+            details_panel = self.query_one("#history_details_panel")
+        except Exception:
+            return
+        history_panel.styles.width = f"{self._history_left_percent}%"
+        details_panel.styles.width = f"{max(5, 100 - self._history_left_percent)}%"
+
+    def _update_history_header(self) -> None:
+        try:
+            header = self.query_one("#history_list_header", Static)
+        except Exception:
+            return
+        header.update(self._build_header_text())
+
     def _refresh_history(self) -> None:
+        self._reload_history_layout_preferences()
+        self._apply_history_workspace_widths()
         header = self.query_one("#history_list_header", Static)
         header.update(self._build_header_text())
 
@@ -947,19 +1110,20 @@ class NegotiationHistoryScreen(Screen):
                 self.load_vacancy_details(str(focused_option.id))
 
     def _build_header_text(self) -> Text:
+        widths = self._history_column_widths
         return Text.assemble(
-            VacancyListScreen._format_segment("№", self.ID_WIDTH, style="bold"),
+            VacancyListScreen._format_segment("№", widths["index"], style="bold"),
             Text("  "),
             VacancyListScreen._format_segment(
-                "Название вакансии", self.TITLE_WIDTH, style="bold"
+                "Название вакансии", widths["title"], style="bold"
             ),
             Text("  "),
-            VacancyListScreen._format_segment("Компания", self.COMPANY_WIDTH, style="bold"),
+            VacancyListScreen._format_segment("Компания", widths["company"], style="bold"),
             Text("  "),
-            VacancyListScreen._format_segment("Статус", self.STATUS_WIDTH, style="bold"),
+            VacancyListScreen._format_segment("Статус", widths["status"], style="bold"),
             Text("  "),
             VacancyListScreen._format_segment(
-                "Дата отклика", self.DATE_WIDTH, style="bold"
+                "Дата отклика", widths["date"], style="bold"
             ),
         )
 
@@ -972,16 +1136,17 @@ class NegotiationHistoryScreen(Screen):
         status: str,
         applied: str,
     ) -> Text:
+        widths = self._history_column_widths
         return Text.assemble(
-            VacancyListScreen._format_segment(index, self.ID_WIDTH, style="bold"),
+            VacancyListScreen._format_segment(index, widths["index"], style="bold"),
             Text("  "),
-            VacancyListScreen._format_segment(title, self.TITLE_WIDTH),
+            VacancyListScreen._format_segment(title, widths["title"]),
             Text("  "),
-            VacancyListScreen._format_segment(company, self.COMPANY_WIDTH),
+            VacancyListScreen._format_segment(company, widths["company"]),
             Text("  "),
-            VacancyListScreen._format_segment(status, self.STATUS_WIDTH),
+            VacancyListScreen._format_segment(status, widths["status"]),
             Text("  "),
-            VacancyListScreen._format_segment(applied, self.DATE_WIDTH),
+            VacancyListScreen._format_segment(applied, widths["date"]),
         )
 
     @staticmethod

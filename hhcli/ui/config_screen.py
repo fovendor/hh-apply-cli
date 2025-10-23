@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -25,6 +25,7 @@ from ..database import (
     load_profile_config,
     log_to_db,
     save_profile_config,
+    get_default_config,
 )
 from ..reference_data import ensure_reference_data
 from ..constants import ConfigKeys, LogSource
@@ -64,6 +65,26 @@ class RoleOption:
     id: str
     label: str
     search_text: str
+
+
+@dataclass(frozen=True)
+class LayoutField:
+    label: str
+    input_id: str
+    config_key: str
+    min_value: int = 1
+    max_value: int = 100
+
+    @property
+    def selector(self) -> str:
+        return f"#{self.input_id}"
+
+
+@dataclass(frozen=True)
+class LayoutSectionDef:
+    title: str
+    fields: tuple[LayoutField, ...]
+    css_class: str
 
 
 class AreaPickerDialog(ModalScreen[str | None]):
@@ -298,6 +319,84 @@ class ConfigScreen(Screen):
         Binding("ctrl+s", "save_config", "Сохранить"),
     ]
 
+    LAYOUT_SECTIONS: ClassVar[tuple[LayoutSectionDef, ...]] = (
+        LayoutSectionDef(
+            "Экран поиска вакансий",
+            (
+                LayoutField(
+                    "Ширина панели \"Вакансии\" (%)",
+                    "vacancy_pane_percent",
+                    ConfigKeys.VACANCY_LEFT_PANE_PERCENT,
+                    min_value=10,
+                    max_value=90,
+                ),
+                LayoutField(
+                    "Колонка \"№\" (%)",
+                    "vacancy_col_index_percent",
+                    ConfigKeys.VACANCY_COL_INDEX_PERCENT,
+                ),
+                LayoutField(
+                    "Колонка \"Название\" (%)",
+                    "vacancy_col_title_percent",
+                    ConfigKeys.VACANCY_COL_TITLE_PERCENT,
+                ),
+                LayoutField(
+                    "Колонка \"Компания\" (%)",
+                    "vacancy_col_company_percent",
+                    ConfigKeys.VACANCY_COL_COMPANY_PERCENT,
+                ),
+                LayoutField(
+                    "Колонка \"Откликался\" (%)",
+                    "vacancy_col_previous_percent",
+                    ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT,
+                ),
+            ),
+            "layout-settings__group-vacancy",
+        ),
+        LayoutSectionDef(
+            "Экран истории откликов",
+            (
+                LayoutField(
+                    "Ширина панели \"История\" (%)",
+                    "history_pane_percent",
+                    ConfigKeys.HISTORY_LEFT_PANE_PERCENT,
+                    min_value=10,
+                    max_value=90,
+                ),
+                LayoutField(
+                    "Колонка \"№\" (%)",
+                    "history_col_index_percent",
+                    ConfigKeys.HISTORY_COL_INDEX_PERCENT,
+                ),
+                LayoutField(
+                    "Колонка \"Название\" (%)",
+                    "history_col_title_percent",
+                    ConfigKeys.HISTORY_COL_TITLE_PERCENT,
+                ),
+                LayoutField(
+                    "Колонка \"Компания\" (%)",
+                    "history_col_company_percent",
+                    ConfigKeys.HISTORY_COL_COMPANY_PERCENT,
+                ),
+                LayoutField(
+                    "Колонка \"Статус\" (%)",
+                    "history_col_status_percent",
+                    ConfigKeys.HISTORY_COL_STATUS_PERCENT,
+                ),
+                LayoutField(
+                    "Колонка \"Дата отклика\" (%)",
+                    "history_col_date_percent",
+                    ConfigKeys.HISTORY_COL_DATE_PERCENT,
+                ),
+            ),
+            "layout-settings__group-history",
+        ),
+    )
+
+    LAYOUT_FIELDS: ClassVar[tuple[LayoutField, ...]] = tuple(
+        field for section in LAYOUT_SECTIONS for field in section.fields
+    )
+
     def __init__(self) -> None:
         super().__init__()
         self._quit_binding_q = None
@@ -373,6 +472,15 @@ class ConfigScreen(Screen):
                 yield Label("Тема интерфейса:")
                 yield Select([], id="theme")
 
+                yield Static("Настройки отображения экранов", classes="header")
+                with Horizontal(id="layout_settings_container", classes="layout-settings"):
+                    for section in self.LAYOUT_SECTIONS:
+                        with Vertical(classes=f"layout-settings__group {section.css_class}") as group:
+                            group.border_title = section.title
+                            group.styles.border_title_align = "left"
+                            for field in section.fields:
+                                yield self._make_layout_row(field.label, field.input_id)
+
                 yield Static("Сопроводительное письмо", classes="header")
                 yield TextArea(id="cover_letter", language="markdown")
 
@@ -439,6 +547,7 @@ class ConfigScreen(Screen):
         """
         Эта часть выполняется в основном потоке, обновляет виджеты.
         """
+        defaults = get_default_config()
         self.query_one("#work_format", Select).set_options(
             [(item["name"], item["id"]) for item in work_formats]
         )
@@ -487,6 +596,7 @@ class ConfigScreen(Screen):
             ]
         )
         theme_select.value = config.get(ConfigKeys.THEME, "hhcli-base")
+        self._populate_layout_settings(config, defaults)
         self._initial_config = self._current_form_config()
         self._form_loaded = True
 
@@ -527,12 +637,41 @@ class ConfigScreen(Screen):
         name = theme_name.removeprefix("hhcli-").replace("-", " ")
         return name.title() or theme_name
 
+    def _make_layout_row(self, label_text: str, input_id: str) -> Horizontal:
+        return Horizontal(
+            Label(label_text, classes="layout-settings__label"),
+            Input(id=input_id, classes="layout-settings__input"),
+            classes="layout-settings__row",
+        )
+
+    def _parse_percent(
+        self,
+        selector: str,
+        fallback: int,
+        *,
+        min_value: int = 1,
+        max_value: int = 100,
+    ) -> int:
+        raw = self.query_one(selector, Input).value.strip()
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = fallback
+        return max(min_value, min(max_value, value))
+
     def _current_form_config(self) -> dict[str, Any]:
         """Возвращает текущее состояние формы в формате конфигурации."""
         def parse_list(text: str) -> list[str]:
             return [item.strip() for item in text.split(",") if item.strip()]
 
-        return {
+        defaults = get_default_config()
+        initial = getattr(self, "_initial_config", {})
+
+        def percent(selector: str, key: str, *, min_value: int = 1, max_value: int = 100) -> int:
+            fallback = initial.get(key, defaults[key])
+            return self._parse_percent(selector, fallback, min_value=min_value, max_value=max_value)
+
+        config_snapshot = {
             ConfigKeys.TEXT_INCLUDE: parse_list(self.query_one("#text_include", Input).value),
             ConfigKeys.NEGATIVE: parse_list(self.query_one("#negative", Input).value),
             ConfigKeys.ROLE_IDS_CONFIG: list(self._selected_role_ids),
@@ -547,6 +686,19 @@ class ConfigScreen(Screen):
             ConfigKeys.STRIKETHROUGH_APPLIED_VAC_NAME: self.query_one("#strikethrough_applied_vac_name", Switch).value,
             ConfigKeys.THEME: self.query_one("#theme", Select).value or "hhcli-base",
         }
+        for field in self.LAYOUT_FIELDS:
+            config_snapshot[field.config_key] = percent(
+                field.selector,
+                field.config_key,
+                min_value=field.min_value,
+                max_value=field.max_value,
+            )
+        return config_snapshot
+
+    def _populate_layout_settings(self, config: dict[str, Any], defaults: dict[str, Any]) -> None:
+        for field in self.LAYOUT_FIELDS:
+            value = config.get(field.config_key, defaults[field.config_key])
+            self.query_one(field.selector, Input).value = str(value)
 
     def _has_unsaved_changes(self) -> bool:
         if not self._form_loaded:

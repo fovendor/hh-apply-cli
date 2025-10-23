@@ -32,7 +32,31 @@ class ConfigKeys:
     STRIKETHROUGH_APPLIED_VAC = "strikethrough_applied_vac"
     STRIKETHROUGH_APPLIED_VAC_NAME = "strikethrough_applied_vac_name"
     THEME = "theme"
+    VACANCY_LEFT_PANE_PERCENT = "vacancy_left_pane_percent"
+    VACANCY_COL_INDEX_PERCENT = "vacancy_col_index_percent"
+    VACANCY_COL_TITLE_PERCENT = "vacancy_col_title_percent"
+    VACANCY_COL_COMPANY_PERCENT = "vacancy_col_company_percent"
+    VACANCY_COL_PREVIOUS_PERCENT = "vacancy_col_previous_percent"
+    HISTORY_LEFT_PANE_PERCENT = "history_left_pane_percent"
+    HISTORY_COL_INDEX_PERCENT = "history_col_index_percent"
+    HISTORY_COL_TITLE_PERCENT = "history_col_title_percent"
+    HISTORY_COL_COMPANY_PERCENT = "history_col_company_percent"
+    HISTORY_COL_STATUS_PERCENT = "history_col_status_percent"
+    HISTORY_COL_DATE_PERCENT = "history_col_date_percent"
 
+LAYOUT_PERCENT_KEYS: tuple[str, ...] = (
+    ConfigKeys.VACANCY_LEFT_PANE_PERCENT,
+    ConfigKeys.VACANCY_COL_INDEX_PERCENT,
+    ConfigKeys.VACANCY_COL_TITLE_PERCENT,
+    ConfigKeys.VACANCY_COL_COMPANY_PERCENT,
+    ConfigKeys.VACANCY_COL_PREVIOUS_PERCENT,
+    ConfigKeys.HISTORY_LEFT_PANE_PERCENT,
+    ConfigKeys.HISTORY_COL_INDEX_PERCENT,
+    ConfigKeys.HISTORY_COL_TITLE_PERCENT,
+    ConfigKeys.HISTORY_COL_COMPANY_PERCENT,
+    ConfigKeys.HISTORY_COL_STATUS_PERCENT,
+    ConfigKeys.HISTORY_COL_DATE_PERCENT,
+)
 
 class ApiErrorReason:
     """

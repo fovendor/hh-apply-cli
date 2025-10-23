@@ -25,7 +25,15 @@ from sqlalchemy import (
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from .constants import AppStateKeys, ConfigKeys, LogSource, LAYOUT_WIDTH_KEYS
+from .constants import (
+    AppStateKeys,
+    ConfigKeys,
+    DELIVERED_STATUS_CODES,
+    ERROR_REASON_LABELS,
+    FAILED_STATUS_CODES,
+    LogSource,
+    LAYOUT_WIDTH_KEYS,
+)
 
 APP_NAME = "hhcli"
 APP_AUTHOR = "fovendor"
@@ -35,6 +43,24 @@ DB_PATH = os.path.join(DATA_DIR, DB_FILENAME)
 
 engine = None
 metadata = MetaData()
+
+
+def _normalize_status(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _status_was_delivered(status: Any) -> bool:
+    code = _normalize_status(status)
+    if not code:
+        return False
+    if code in FAILED_STATUS_CODES:
+        return False
+    if code in DELIVERED_STATUS_CODES:
+        return True
+    for prefix in ("applied", "response", "responded", "invited", "offer"):
+        if code.startswith(prefix):
+            return True
+    return False
 
 
 def get_default_config() -> dict[str, Any]:
@@ -83,6 +109,7 @@ def get_default_config() -> dict[str, Any]:
         ConfigKeys.HISTORY_COL_TITLE_WIDTH: 38,
         ConfigKeys.HISTORY_COL_COMPANY_WIDTH: 24,
         ConfigKeys.HISTORY_COL_STATUS_WIDTH: 16,
+        ConfigKeys.HISTORY_COL_SENT_WIDTH: 4,
         ConfigKeys.HISTORY_COL_DATE_WIDTH: 16,
     }
 
@@ -125,6 +152,7 @@ profile_configs = Table(
     Column("history_col_title_width", Integer, nullable=False, server_default="38"),
     Column("history_col_company_width", Integer, nullable=False, server_default="24"),
     Column("history_col_status_width", Integer, nullable=False, server_default="16"),
+    Column("history_col_sent_width", Integer, nullable=False, server_default="4"),
     Column("history_col_date_width", Integer, nullable=False, server_default="16"),
 )
 
@@ -182,6 +210,7 @@ negotiation_history = Table(
     Column("employer_name", String),
     Column("status", String),
     Column("reason", String),
+    Column("was_delivered", Boolean, nullable=False, server_default="0"),
     Column("applied_at", DateTime, nullable=False),
     UniqueConstraint("vacancy_id", "resume_id", name="uq_negotiation_vacancy_resume"),
 )
@@ -505,6 +534,7 @@ def ensure_schema_upgrades() -> None:
             ("history_col_title_width", defaults[ConfigKeys.HISTORY_COL_TITLE_WIDTH]),
             ("history_col_company_width", defaults[ConfigKeys.HISTORY_COL_COMPANY_WIDTH]),
             ("history_col_status_width", defaults[ConfigKeys.HISTORY_COL_STATUS_WIDTH]),
+            ("history_col_sent_width", defaults[ConfigKeys.HISTORY_COL_SENT_WIDTH]),
             ("history_col_date_width", defaults[ConfigKeys.HISTORY_COL_DATE_WIDTH]),
         ]
 
@@ -612,6 +642,9 @@ def ensure_schema_upgrades() -> None:
                         "history_col_status_width": history_widths.get(
                             "history_col_status_percent", defaults[ConfigKeys.HISTORY_COL_STATUS_WIDTH]
                         ),
+                        "history_col_sent_width": history_widths.get(
+                            "history_col_sent_percent", defaults[ConfigKeys.HISTORY_COL_SENT_WIDTH]
+                        ),
                         "history_col_date_width": history_widths.get(
                             "history_col_date_percent", defaults[ConfigKeys.HISTORY_COL_DATE_WIDTH]
                         ),
@@ -628,6 +661,7 @@ SET vacancy_col_index_width = :vacancy_col_index_width,
     history_col_title_width = :history_col_title_width,
     history_col_company_width = :history_col_company_width,
     history_col_status_width = :history_col_status_width,
+    history_col_sent_width = :history_col_sent_width,
     history_col_date_width = :history_col_date_width
 WHERE profile_name = :profile_name
 """
@@ -638,6 +672,82 @@ WHERE profile_name = :profile_name
         history_info = list(
             connection.execute(sa_text("PRAGMA table_info(negotiation_history)"))
         )
+
+        history_columns = {row[1] for row in history_info}
+        if "was_delivered" not in history_columns:
+            connection.execute(
+                sa_text(
+                    "ALTER TABLE negotiation_history"
+                    " ADD COLUMN was_delivered INTEGER NOT NULL DEFAULT 0"
+                )
+            )
+            history_columns.add("was_delivered")
+
+        # Приводим статус и причину в истории откликов к значениям API.
+        status_replacements = {
+            "Отклик": "applied",
+            "отклик": "applied",
+            "ОТКЛИК": "applied",
+            "Отказ": "rejected",
+            "отказ": "rejected",
+            "ОТКАЗ": "rejected",
+            "Собеседование": "invited",
+            "собеседование": "invited",
+            "СОБЕСЕДОВАНИЕ": "invited",
+            "Приглашение на собеседование": "invited",
+            "приглашение на собеседование": "invited",
+            "ПРИГЛАШЕНИЕ НА СОБЕСЕДОВАНИЕ": "invited",
+            "Назначено собеседование": "invited",
+            "назначено собеседование": "invited",
+            "НАЗНАЧЕНО СОБЕСЕДОВАНИЕ": "invited",
+            "Собес": "invited",
+            "собес": "invited",
+            "Игнор": "ignored",
+            "игнор": "ignored",
+            "ИГНОР": "ignored",
+            "Тест": "test_required",
+            "тест": "test_required",
+            "Вопросы": "questions_required",
+            "вопросы": "questions_required",
+        }
+        for src, dst in status_replacements.items():
+            connection.execute(
+                sa_text(
+                    "UPDATE negotiation_history SET status = :dst WHERE status = :src"
+                ),
+                {"src": src, "dst": dst},
+            )
+
+        connection.execute(
+            sa_text(
+                "UPDATE negotiation_history SET status = LOWER(status) "
+                "WHERE status IS NOT NULL AND status <> LOWER(status)"
+            )
+        )
+
+        reason_labels_inverted = {
+            label: code for code, label in ERROR_REASON_LABELS.items()
+        }
+        for label, code in reason_labels_inverted.items():
+            connection.execute(
+                sa_text(
+                    "UPDATE negotiation_history SET reason = :code WHERE reason = :label"
+                ),
+                {"label": label, "code": code},
+            )
+
+        rows = connection.execute(
+            sa_text("SELECT id, status FROM negotiation_history")
+        ).fetchall()
+        for row in rows:
+            delivered_flag = 1 if _status_was_delivered(row[1]) else 0
+            connection.execute(
+                sa_text(
+                    "UPDATE negotiation_history SET was_delivered = :flag WHERE id = :id"
+                ),
+                {"flag": delivered_flag, "id": row[0]},
+            )
+
         history_columns = {row[1] for row in history_info}
 
         needs_rebuild = bool(history_info) and (
@@ -658,6 +768,7 @@ CREATE TABLE negotiation_history_new (
     employer_name TEXT,
     status TEXT,
     reason TEXT,
+    was_delivered INTEGER NOT NULL DEFAULT 0,
     applied_at DATETIME NOT NULL,
     UNIQUE(vacancy_id, resume_id)
 )
@@ -671,7 +782,7 @@ CREATE TABLE negotiation_history_new (
                         """
 INSERT INTO negotiation_history_new (
     vacancy_id, profile_name, resume_id, resume_title,
-    vacancy_title, employer_name, status, reason, applied_at
+    vacancy_title, employer_name, status, reason, was_delivered, applied_at
 )
 SELECT
     vacancy_id,
@@ -682,6 +793,7 @@ SELECT
     employer_name,
     status,
     reason,
+    0,
     applied_at
 FROM negotiation_history
                         """
@@ -693,7 +805,7 @@ FROM negotiation_history
                         """
 INSERT INTO negotiation_history_new (
     vacancy_id, profile_name, resume_id, resume_title,
-    vacancy_title, employer_name, status, reason, applied_at
+    vacancy_title, employer_name, status, reason, was_delivered, applied_at
 )
 SELECT
     vacancy_id,
@@ -704,6 +816,7 @@ SELECT
     employer_name,
     status,
     reason,
+    0,
     applied_at
 FROM negotiation_history
                         """
@@ -740,6 +853,8 @@ def record_apply_action(
         employer_name: str,
         status: str,
         reason: str | None):
+    normalized_status = _normalize_status(status)
+    normalized_reason = _normalize_status(reason) or None
     values = {
         "vacancy_id": vacancy_id,
         "profile_name": profile_name,
@@ -747,8 +862,9 @@ def record_apply_action(
         "resume_title": (resume_title or "").strip(),
         "vacancy_title": vacancy_title,
         "employer_name": employer_name,
-        "status": status,
-        "reason": reason,
+        "status": normalized_status or None,
+        "reason": normalized_reason,
+        "was_delivered": 1 if _status_was_delivered(normalized_status) else 0,
         "applied_at": datetime.now(),
     }
     stmt = sqlite_insert(negotiation_history).values(**values)
@@ -761,6 +877,7 @@ def record_apply_action(
             "employer_name": values["employer_name"],
             "status": values["status"],
             "reason": values["reason"],
+            "was_delivered": values["was_delivered"],
             "applied_at": values["applied_at"],
         }
     )
@@ -813,6 +930,14 @@ def upsert_negotiation_history(negotiations: list[dict], profile_name: str):
             if not vacancy or not vacancy.get('id'):
                 continue
             resume_info = item.get("resume") or {}
+            state_info = item.get("state") or {}
+            state_id = state_info.get("id") or state_info.get("code")
+            status_value = (
+                str(state_id).strip()
+                if state_id
+                else str(state_info.get("name") or item.get("status") or "unknown").strip()
+            )
+            status_value = status_value.lower()
             values = {
                 "vacancy_id": vacancy['id'],
                 "profile_name": profile_name,
@@ -820,8 +945,9 @@ def upsert_negotiation_history(negotiations: list[dict], profile_name: str):
                 "resume_title": (resume_info.get("title") or "").strip(),
                 "vacancy_title": vacancy.get('name'),
                 "employer_name": vacancy.get('employer', {}).get('name'),
-                "status": item.get('state', {}).get('name', 'N/A'),
+                "status": status_value,
                 "reason": None,
+                "was_delivered": 1 if _status_was_delivered(status_value) else 0,
                 "applied_at": datetime.fromisoformat(
                     item['updated_at'].replace("Z", "+00:00")),
             }
@@ -834,6 +960,7 @@ def upsert_negotiation_history(negotiations: list[dict], profile_name: str):
                     "vacancy_title": values["vacancy_title"],
                     "employer_name": values["employer_name"],
                     "status": values["status"],
+                    "was_delivered": values["was_delivered"],
                     "applied_at": values["applied_at"],
                 }
             )

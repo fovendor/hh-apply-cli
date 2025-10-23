@@ -394,6 +394,12 @@ class ConfigScreen(Screen):
                     max_value=COLUMN_WIDTH_MAX,
                 ),
                 LayoutField(
+                    "Колонка \"✉\" (симв.)",
+                    "history_col_sent_width",
+                    ConfigKeys.HISTORY_COL_SENT_WIDTH,
+                    max_value=COLUMN_WIDTH_MAX,
+                ),
+                LayoutField(
                     "Колонка \"Дата отклика\" (симв.)",
                     "history_col_date_width",
                     ConfigKeys.HISTORY_COL_DATE_WIDTH,

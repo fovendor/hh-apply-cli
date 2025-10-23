@@ -1,6 +1,6 @@
 import html
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable, Optional
 
 import html2text
@@ -44,6 +44,9 @@ from ..reference_data import ensure_reference_data
 from ..constants import (
     ApiErrorReason,
     ConfigKeys,
+    DELIVERED_STATUS_CODES,
+    ERROR_REASON_LABELS,
+    FAILED_STATUS_CODES,
     LogSource,
     SearchMode,
 )
@@ -54,6 +57,7 @@ from .widgets import Pagination
 
 CSS_MANAGER = CssManager()
 MAX_COLUMN_WIDTH = 200
+IGNORED_AFTER_DAYS = 4
 
 
 def _clamp(value: int, min_value: int, max_value: int) -> int:
@@ -80,18 +84,46 @@ def _normalize_width_map(
         normalized[key] = normalized_value
     return normalized
 
-ERROR_REASON_MAP = {
-    ApiErrorReason.APPLIED: "Отклик отправлен",
-    ApiErrorReason.ALREADY_APPLIED: "Вы уже откликались",
-    ApiErrorReason.TEST_REQUIRED: "Требуется пройти тест",
-    ApiErrorReason.QUESTIONS_REQUIRED: "Требуются ответы на вопросы",
-    ApiErrorReason.NEGOTIATIONS_FORBIDDEN: "Работодатель запретил отклики",
-    ApiErrorReason.RESUME_NOT_PUBLISHED: "Резюме не опубликовано",
-    ApiErrorReason.CONDITIONS_NOT_MET: "Не выполнены условия",
-    ApiErrorReason.NOT_FOUND: "Вакансия в архиве",
-    ApiErrorReason.BAD_ARGUMENT: "Некорректные параметры",
-    ApiErrorReason.UNKNOWN_API_ERROR: "Неизвестная ошибка API",
-    ApiErrorReason.NETWORK_ERROR: "Ошибка сети",
+FAILED_REASON_SHORT_LABELS: dict[str, str] = {
+    ApiErrorReason.TEST_REQUIRED: "Тест",
+    ApiErrorReason.QUESTIONS_REQUIRED: "Вопросы",
+    ApiErrorReason.ALREADY_APPLIED: "Дубль",
+    ApiErrorReason.NEGOTIATIONS_FORBIDDEN: "Запрет",
+    ApiErrorReason.RESUME_NOT_PUBLISHED: "Резюме",
+    ApiErrorReason.CONDITIONS_NOT_MET: "Не подходит",
+    ApiErrorReason.NOT_FOUND: "Архив",
+    ApiErrorReason.BAD_ARGUMENT: "Ошибка",
+    ApiErrorReason.UNKNOWN_API_ERROR: "Ошибка",
+    ApiErrorReason.NETWORK_ERROR: "Сеть",
+}
+
+STATUS_DISPLAY_MAP: dict[str, str] = {
+    "applied": "Отклик",
+    "invited": "Собес",
+    "interview": "Собес",
+    "interview_assigned": "Собес",
+    "interview_scheduled": "Собес",
+    "offer": "Оффер",
+    "offer_made": "Оффер",
+    "rejected": "Отказ",
+    "declined": "Отказ",
+    "canceled": "Отказ",
+    "cancelled": "Отказ",
+    "discard": "Отказ",
+    "employer_viewed": "Просмотр",
+    "viewed": "Просмотр",
+    "seen": "Просмотр",
+    "in_progress": "В работе",
+    "considering": "В работе",
+    "processing": "В работе",
+    "responded": "Ответ",
+    "response": "Отклик",
+    "answered": "Ответ",
+    "ignored": "Игнор",
+    "hired": "Выход",
+    "accepted": "Принят",
+    "test_required": "Тест",
+    "questions_required": "Вопросы",
 }
 
 
@@ -155,19 +187,71 @@ def _normalize(text: Optional[str]) -> str:
         return ""
     return " ".join(str(text).lower().split())
 
+def _normalize_status_code(status: Optional[str]) -> str:
+    return (status or "").strip().lower()
 
-DELIVERED_MARKERS = ("отклик", "доставл", "прочитан", "applied")
-FAILED_MARKERS = ("failed",)
+
+def _normalize_reason_code(reason: Optional[str]) -> str:
+    return (reason or "").strip().lower()
+
+
+def _now_for(dt: datetime) -> datetime:
+    return datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
+
+
+def _is_ignored(applied_at: Optional[datetime]) -> bool:
+    if not isinstance(applied_at, datetime):
+        return False
+    return (_now_for(applied_at) - applied_at) > timedelta(days=IGNORED_AFTER_DAYS)
 
 
 def _is_delivered(status: Optional[str]) -> bool:
-    s = _normalize(status)
-    return any(m in s for m in DELIVERED_MARKERS)
+    code = _normalize_status_code(status)
+    if not code:
+        return False
+    if code in FAILED_STATUS_CODES:
+        return False
+    if code in DELIVERED_STATUS_CODES:
+        return True
+    for prefix in ("applied", "response", "responded", "invited", "offer"):
+        if code.startswith(prefix):
+            return True
+    return False
 
 
 def _is_failed(status: Optional[str]) -> bool:
-    s = _normalize(status)
-    return any(m in s for m in FAILED_MARKERS)
+    code = _normalize_status_code(status)
+    return code in FAILED_STATUS_CODES
+
+
+def _format_history_status(
+    status: Optional[str],
+    reason: Optional[str],
+    applied_at: Optional[datetime],
+) -> str:
+    code = _normalize_status_code(status)
+    if not code:
+        return "-"
+
+    if code == "failed":
+        reason_code = _normalize_reason_code(reason)
+        if reason_code in FAILED_REASON_SHORT_LABELS:
+            return FAILED_REASON_SHORT_LABELS[reason_code]
+        if reason_code in ERROR_REASON_LABELS:
+            return ERROR_REASON_LABELS[reason_code]
+        return reason or "Ошибка"
+
+    if code in {"applied", "response"}:
+        if _is_ignored(applied_at):
+            return STATUS_DISPLAY_MAP.get("ignored", "Игнор")
+        return STATUS_DISPLAY_MAP.get(code, "Отклик")
+
+    if code in STATUS_DISPLAY_MAP:
+        return STATUS_DISPLAY_MAP[code]
+
+    if status:
+        return str(status).replace("_", " ").title()
+    return "-"
 
 
 def _collect_delivered(
@@ -867,7 +951,7 @@ class VacancyListScreen(Screen):
             vac_title = v.get("name", vacancy_id)
             emp = (v.get("employer") or {}).get("name")
 
-            human_readable_reason = ERROR_REASON_MAP.get(
+            human_readable_reason = ERROR_REASON_LABELS.get(
                 reason_code, reason_code
             )
 
@@ -900,7 +984,7 @@ class VacancyListScreen(Screen):
                     vac_title,
                     emp,
                     "failed",
-                    human_readable_reason,
+                    reason_code,
                 )
 
         def finalize() -> None:
@@ -939,7 +1023,7 @@ class NegotiationHistoryScreen(Screen):
         Binding("с", "edit_config", "Настройки (RU)", show=False),
     ]
 
-    COLUMN_KEYS = ["index", "title", "company", "status", "date"]
+    COLUMN_KEYS = ["index", "title", "company", "status", "sent", "date"]
 
     def __init__(self, resume_id: str, resume_title: str | None = None) -> None:
         super().__init__()
@@ -1022,6 +1106,11 @@ class NegotiationHistoryScreen(Screen):
                 1,
                 MAX_COLUMN_WIDTH,
             ),
+            "sent": _clamp(
+                int(config.get(ConfigKeys.HISTORY_COL_SENT_WIDTH, defaults[ConfigKeys.HISTORY_COL_SENT_WIDTH])),
+                1,
+                MAX_COLUMN_WIDTH,
+            ),
             "date": _clamp(
                 int(config.get(ConfigKeys.HISTORY_COL_DATE_WIDTH, defaults[ConfigKeys.HISTORY_COL_DATE_WIDTH])),
                 1,
@@ -1058,7 +1147,19 @@ class NegotiationHistoryScreen(Screen):
         option_list.clear_options()
 
         profile_name = self.app.client.profile_name
-        entries = get_negotiation_history_for_resume(profile_name, self.resume_id)
+        raw_entries = get_negotiation_history_for_resume(profile_name, self.resume_id)
+
+        entries: list[dict] = []
+        for item in raw_entries:
+            display_status = _format_history_status(
+                item.get("status"),
+                item.get("reason"),
+                item.get("applied_at"),
+            )
+            enriched = dict(item)
+            enriched["status_display"] = display_status
+            enriched["sent_display"] = "да" if bool(item.get("was_delivered")) else "нет"
+            entries.append(enriched)
 
         self.history = entries
         self.history_by_vacancy = {
@@ -1079,15 +1180,17 @@ class NegotiationHistoryScreen(Screen):
             vacancy_id = str(entry.get("vacancy_id") or "")
             title = entry.get("vacancy_title") or vacancy_id
             company = entry.get("employer_name") or "-"
-            applied_label = self._format_datetime(entry.get("applied_at"))
-            status_label = entry.get("status") or "-"
+            applied_label = self._format_date(entry.get("applied_at"))
+            status_label = entry.get("status_display") or "-"
+            sent_label = entry.get("sent_display") or ("да" if entry.get("was_delivered") else "нет")
 
             row_text = self._build_row_text(
                 index=f"#{idx}",
                 title=title,
                 company=company,
-                applied=applied_label,
                 status=status_label,
+                delivered=sent_label,
+                applied=applied_label,
             )
             option_list.add_option(Option(row_text, vacancy_id))
 
@@ -1112,6 +1215,8 @@ class NegotiationHistoryScreen(Screen):
             Text("  "),
             VacancyListScreen._format_segment("Статус", widths["status"], style="bold"),
             Text("  "),
+            VacancyListScreen._format_segment("✉", widths["sent"], style="bold"),
+            Text("  "),
             VacancyListScreen._format_segment(
                 "Дата отклика", widths["date"], style="bold"
             ),
@@ -1124,6 +1229,7 @@ class NegotiationHistoryScreen(Screen):
         title: str,
         company: str,
         status: str,
+        delivered: str,
         applied: str,
     ) -> Text:
         widths = self._history_column_widths
@@ -1135,6 +1241,8 @@ class NegotiationHistoryScreen(Screen):
             VacancyListScreen._format_segment(company, widths["company"]),
             Text("  "),
             VacancyListScreen._format_segment(status, widths["status"]),
+            Text("  "),
+            VacancyListScreen._format_segment(delivered, widths["sent"]),
             Text("  "),
             VacancyListScreen._format_segment(applied, widths["date"]),
         )
@@ -1149,6 +1257,18 @@ class NegotiationHistoryScreen(Screen):
                 return dt.strftime("%Y-%m-%d %H:%M")
             except ValueError:
                 return value
+        return "-"
+
+    @staticmethod
+    def _format_date(value: datetime | str | None) -> str:
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d")
+        if isinstance(value, str):
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return dt.strftime("%Y-%m-%d")
+            except ValueError:
+                return value.split(" ")[0]
         return "-"
 
     def on_option_list_option_highlighted(
@@ -1225,7 +1345,19 @@ class NegotiationHistoryScreen(Screen):
         ) if skills else "Не указаны"
 
         applied_label = self._format_datetime(record.get("applied_at"))
-        status_label = record.get("status") or "-"
+        status_label = record.get("status_display") or _format_history_status(
+            record.get("status"),
+            record.get("reason"),
+            record.get("applied_at"),
+        )
+        reason_label = ""
+        if _normalize_status_code(record.get("status")) == "failed":
+            reason_code = _normalize_reason_code(record.get("reason"))
+            if reason_code in ERROR_REASON_LABELS:
+                reason_label = ERROR_REASON_LABELS[reason_code]
+            elif record.get("reason"):
+                reason_label = str(record.get("reason"))
+        sent_label = "да" if bool(record.get("was_delivered")) else "нет"
 
         company_name = details.get("employer", {}).get("name") or record.get("employer_name") or "-"
         link = details.get("alternate_url") or "—"
@@ -1238,8 +1370,15 @@ class NegotiationHistoryScreen(Screen):
             f"**Ключевые навыки:**\n{skills_text}\n\n"
             f"**Дата и время отклика:** {applied_label}\n\n"
             f"**Статус:** {status_label}\n\n"
-            f"**Описание:**\n\n{desc_md}\n"
+            f"**✉:** {sent_label}\n\n"
         )
+        if reason_label:
+            doc += f"**Причина:** {reason_label}\n\n"
+        doc += "**Описание:**\n\n"
+        if desc_md:
+            doc += f"{desc_md}\n"
+        else:
+            doc += "[dim]Описание вакансии недоступно.[/dim]\n"
         self.query_one("#history_details").update(doc)
         self.query_one("#history_loader", LoadingIndicator).display = False
         self.query_one("#history_details_pane").scroll_home(animate=False)

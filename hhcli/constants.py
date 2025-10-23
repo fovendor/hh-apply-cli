@@ -42,6 +42,7 @@ class ConfigKeys:
     HISTORY_COL_TITLE_WIDTH = "history_col_title_width"
     HISTORY_COL_COMPANY_WIDTH = "history_col_company_width"
     HISTORY_COL_STATUS_WIDTH = "history_col_status_width"
+    HISTORY_COL_SENT_WIDTH = "history_col_sent_width"
     HISTORY_COL_DATE_WIDTH = "history_col_date_width"
 
 LAYOUT_WIDTH_KEYS: tuple[str, ...] = (
@@ -55,6 +56,7 @@ LAYOUT_WIDTH_KEYS: tuple[str, ...] = (
     ConfigKeys.HISTORY_COL_TITLE_WIDTH,
     ConfigKeys.HISTORY_COL_COMPANY_WIDTH,
     ConfigKeys.HISTORY_COL_STATUS_WIDTH,
+    ConfigKeys.HISTORY_COL_SENT_WIDTH,
     ConfigKeys.HISTORY_COL_DATE_WIDTH,
 )
 
@@ -73,6 +75,48 @@ class ApiErrorReason:
     BAD_ARGUMENT = "bad_argument"
     UNKNOWN_API_ERROR = "unknown_api_error"
     NETWORK_ERROR = "network_error"
+
+
+ERROR_REASON_LABELS: dict[str, str] = {
+    ApiErrorReason.APPLIED: "Отклик отправлен",
+    ApiErrorReason.ALREADY_APPLIED: "Вы уже откликались",
+    ApiErrorReason.TEST_REQUIRED: "Требуется пройти тест",
+    ApiErrorReason.QUESTIONS_REQUIRED: "Требуются ответы на вопросы",
+    ApiErrorReason.NEGOTIATIONS_FORBIDDEN: "Работодатель запретил отклики",
+    ApiErrorReason.RESUME_NOT_PUBLISHED: "Резюме не опубликовано",
+    ApiErrorReason.CONDITIONS_NOT_MET: "Не выполнены условия",
+    ApiErrorReason.NOT_FOUND: "Вакансия в архиве",
+    ApiErrorReason.BAD_ARGUMENT: "Некорректные параметры",
+    ApiErrorReason.UNKNOWN_API_ERROR: "Неизвестная ошибка API",
+    ApiErrorReason.NETWORK_ERROR: "Ошибка сети",
+}
+
+DELIVERED_STATUS_CODES: frozenset[str] = frozenset({
+    "applied",
+    "responded",
+    "response",
+    "invited",
+    "interview",
+    "interview_assigned",
+    "interview_scheduled",
+    "offer",
+    "offer_made",
+    "rejected",
+    "declined",
+    "canceled",
+    "cancelled",
+    "discard",
+    "employer_viewed",
+    "viewed",
+    "seen",
+    "in_progress",
+    "considering",
+    "processing",
+    "accepted",
+    "hired",
+})
+
+FAILED_STATUS_CODES: frozenset[str] = frozenset({"failed"})
 
 
 class LogSource:

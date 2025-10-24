@@ -199,6 +199,11 @@ def _now_for(dt: datetime) -> datetime:
     return datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now()
 
 
+def _set_loader_visible(container: Screen, loader_id: str, visible: bool) -> None:
+    """Toggle a loading indicator within the given container."""
+    container.query_one(f"#{loader_id}", LoadingIndicator).display = visible
+
+
 def _is_ignored(applied_at: Optional[datetime]) -> bool:
     if not isinstance(applied_at, datetime):
         return False
@@ -602,7 +607,7 @@ class VacancyListScreen(Screen):
                             "чтобы увидеть детали.[/dim]",
                             id="vacancy_details",
                         )
-                        yield LoadingIndicator()
+                        yield LoadingIndicator(id="vacancy_loader")
             yield Footer()
 
     def on_mount(self) -> None:
@@ -621,7 +626,7 @@ class VacancyListScreen(Screen):
         self._reload_vacancy_layout_preferences()
         self._apply_vacancy_workspace_widths()
         self._update_vacancy_header()
-        self.query_one(LoadingIndicator).display = True
+        _set_loader_visible(self, "vacancy_loader", True)
         self.query_one(VacancySelectionList).clear_options()
         self.query_one(VacancySelectionList).add_option(
             Selection("Загрузка вакансий...", "__none__", disabled=True)
@@ -684,7 +689,7 @@ class VacancyListScreen(Screen):
         pagination.update_state(self.current_page, self.total_pages)
 
         self._refresh_vacancy_list()
-        self.query_one(LoadingIndicator).display = False
+        _set_loader_visible(self, "vacancy_loader", False)
 
     def _refresh_vacancy_list(self) -> None:
         """Перерисовывает список вакансий, сохраняя текущий фокус."""
@@ -787,13 +792,14 @@ class VacancyListScreen(Screen):
         cached = get_vacancy_from_cache(vacancy_id)
         if cached:
             log_to_db("INFO", LogSource.CACHE, f"Кэш попадание: {vacancy_id}")
+            _set_loader_visible(self, "vacancy_loader", False)
             self.display_vacancy_details(cached, vacancy_id)
             return
 
         log_to_db("INFO", LogSource.CACHE,
                   f"Нет в кэше, тянем из API: {vacancy_id}")
-        self.query_one(LoadingIndicator).display = True
-        self.query_one("#vacancy_details").update("Загрузка...")
+        _set_loader_visible(self, "vacancy_loader", True)
+        self.query_one("#vacancy_details", Markdown).update("")
         self.run_worker(
             self.fetch_vacancy_details(vacancy_id),
             exclusive=True, thread=True
@@ -812,6 +818,12 @@ class VacancyListScreen(Screen):
             self.app.call_from_thread(
                 self.query_one("#vacancy_details").update,
                 f"Ошибка загрузки: {exc}"
+            )
+            self.app.call_from_thread(
+                _set_loader_visible,
+                self,
+                "vacancy_loader",
+                False,
             )
 
     def display_vacancy_details(self, details: dict, vacancy_id: str) -> None:
@@ -852,7 +864,7 @@ class VacancyListScreen(Screen):
             f"**Описание:**\n\n{desc_md}\n"
         )
         self.query_one("#vacancy_details").update(doc)
-        self.query_one(LoadingIndicator).display = False
+        _set_loader_visible(self, "vacancy_loader", False)
         self.query_one("#details_pane").scroll_home(animate=False)
 
     def action_toggle_select(self) -> None:
@@ -1173,7 +1185,7 @@ class NegotiationHistoryScreen(Screen):
             self.query_one("#history_details", Markdown).update(
                 "[dim]Нет данных для отображения.[/dim]"
             )
-            self.query_one("#history_loader", LoadingIndicator).display = False
+            _set_loader_visible(self, "history_loader", False)
             return
 
         for idx, entry in enumerate(entries, start=1):
@@ -1287,13 +1299,13 @@ class NegotiationHistoryScreen(Screen):
         if not vacancy_id:
             return
         self._pending_details_id = vacancy_id
-        self.query_one("#history_loader", LoadingIndicator).display = True
-        self.query_one("#history_details").update("Загрузка...")
+        _set_loader_visible(self, "history_loader", True)
+        self.query_one("#history_details", Markdown).update("")
 
         cached = get_vacancy_from_cache(vacancy_id)
         if cached:
             self.display_history_details(cached, vacancy_id)
-            self.query_one("#history_loader", LoadingIndicator).display = False
+            _set_loader_visible(self, "history_loader", False)
             return
 
         self.run_worker(
@@ -1380,7 +1392,7 @@ class NegotiationHistoryScreen(Screen):
         else:
             doc += "[dim]Описание вакансии недоступно.[/dim]\n"
         self.query_one("#history_details").update(doc)
-        self.query_one("#history_loader", LoadingIndicator).display = False
+        _set_loader_visible(self, "history_loader", False)
         self.query_one("#history_details_pane").scroll_home(animate=False)
 
     def action_edit_config(self) -> None:
@@ -1391,7 +1403,7 @@ class NegotiationHistoryScreen(Screen):
 
     def _display_details_error(self, message: str) -> None:
         self.query_one("#history_details", Markdown).update(message)
-        self.query_one("#history_loader", LoadingIndicator).display = False
+        _set_loader_visible(self, "history_loader", False)
 
 class ResumeSelectionScreen(Screen):
     """Выбор резюме."""

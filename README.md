@@ -23,7 +23,7 @@
 Установка производится одной командой. Скрипт исключает конфликты с другими Python-пакетами в системе, установка всех зависимостей происходит в изолированное окружение с помощью `pipx`.
 
 ```bash
-bash <(curl -sSL https://raw.githubusercontent.com/fovendor/hhcli/master/install.sh)
+bash <(curl -sSL -H "Cache-Control: no-cache" https://raw.githubusercontent.com/fovendor/hhcli/master/install.sh)
 ```
 
 > **Примечание:** Если `pipx` отсутствует в системе, скрипт запросит пароль (`sudo`) для его установки. Выполнение скриптов из интернета несёт потенциальные риски, ознакомьтесь с [кодом скрипта](install.sh) перед запуском.
@@ -33,7 +33,7 @@ bash <(curl -sSL https://raw.githubusercontent.com/fovendor/hhcli/master/install
 Для удаления приложения выполните команду:
 
 ```bash
-pipx uninstall hhcli
+bash <(curl -sSL https://raw.githubusercontent.com/fovendor/hhcli/master/install.sh) uninstall
 ```
 Команда удаляет приложение, но не ваши данные. Для удаления всех данных (база данных, профили, кэш, отклики), удалите каталог `~/.local/share/hhcli`.
 

@@ -1,21 +1,12 @@
-import os
 import sys
 from hhcli.client import HHApiClient
 from hhcli.database import init_db, set_active_profile, get_active_profile_name, log_to_db
 from hhcli.ui.tui import HHCliApp
 
-CLIENT_ID = os.getenv("HH_CLIENT_ID")
-CLIENT_SECRET = os.getenv("HH_CLIENT_SECRET")
-
 def run():
     """Главная функция-запускатор и диспетчер команд."""
     init_db()
     log_to_db("INFO", "Main", "Запуск приложения hhcli.")
-
-    if not CLIENT_ID or not CLIENT_SECRET:
-        log_to_db("ERROR", "Main", "Переменные окружения HH_CLIENT_ID и HH_CLIENT_SECRET не установлены.")
-        print("Ошибка: не установлены переменные окружения HH_CLIENT_ID и HH_CLIENT_SECRET.")
-        return
 
     args = sys.argv[1:]
 
@@ -26,7 +17,7 @@ def run():
             log_to_db("INFO", "Main", f"Обнаружена команда --auth для профиля '{profile_name}'.")
             print(f"Запуск аутентификации для профиля: '{profile_name}'")
 
-            client = HHApiClient(client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
+            client = HHApiClient()
             client.authorize(profile_name)
             set_active_profile(profile_name)
 
@@ -46,7 +37,7 @@ def run():
         print("  hhcli --auth <имя_профиля>")
         return
 
-    client = HHApiClient(client_id=CLIENT_ID, client_secret=CLIENT_SECRET)
+    client = HHApiClient()
     try:
         log_to_db("INFO", "Main", f"Профиль '{active_profile}' активен. Загрузка данных профиля.")
         client.load_profile_data(active_profile)

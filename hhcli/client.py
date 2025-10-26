@@ -23,9 +23,7 @@ class HHApiClient:
     Клиент для взаимодействия с API HeadHunter.
     Управляет аутентификацией и выполняет запросы.
     """
-    def __init__(self, client_id: str, client_secret: str):
-        self._client_id = client_id
-        self._client_secret = client_secret
+    def __init__(self):
         self.access_token = None
         self.refresh_token = None
         self.token_expires_at = None
@@ -80,8 +78,23 @@ class HHApiClient:
 
     def authorize(self, profile_name: str):
         self.profile_name = profile_name
+
+        PROXY_BASE_URL = "https://hh.ether-memory.com"
+        PROXY_CONFIG_URL = f"{PROXY_BASE_URL}/api/get_config"
+        PROXY_EXCHANGE_URL = f"{PROXY_BASE_URL}/api/exchange_code"
+
+        try:
+            print("Получение конфигурации с сервера...")
+            config_resp = requests.get(PROXY_CONFIG_URL)
+            config_resp.raise_for_status()
+            public_client_id = config_resp.json()["client_id"]
+        except requests.RequestException as e:
+            print(f"Критическая ошибка: не удалось получить конфигурацию с сервера: {e}")
+            log_to_db("ERROR", LogSource.OAUTH, f"Не удалось получить Client ID с прокси-сервера: {e}")
+            return # Прерываем авторизацию
+
         auth_url = (f"{OAUTH_URL}/authorize?response_type=code&"
-                    f"client_id={self._client_id}&redirect_uri={REDIRECT_URI}")
+                    f"client_id={public_client_id}&redirect_uri={REDIRECT_URI}")
         server_shutdown_event = threading.Event()
         app = Flask(__name__)
 
@@ -91,15 +104,11 @@ class HHApiClient:
             if not code:
                 return "Ошибка: не удалось получить код авторизации.", 400
             try:
-                payload = {
-                    "grant_type": "authorization_code",
-                    "client_id": self._client_id,
-                    "client_secret": self._client_secret, "code": code,
-                    "redirect_uri": REDIRECT_URI
-                }
-                response = requests.post(f"{OAUTH_URL}/token", data=payload)
+                proxy_payload = {"code": code}
+                response = requests.post(PROXY_EXCHANGE_URL, json=proxy_payload)
                 response.raise_for_status()
                 token_data = response.json()
+
                 headers = {
                     "Authorization": f"Bearer {token_data['access_token']}"
                 }

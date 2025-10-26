@@ -1,8 +1,8 @@
 [tool.poetry]
 name = "hhcli"
-version = "0.4.0"
+version = "0.1.0"
 description = "Неофициальный CLI-клиент для поиска работы и откликов на hh.ru."
-authors = ["Your Name <you@example.com>"]
+authors = ["fovendor <fovendor@gmail.com>"]
 readme = "README.md"
 license = "MIT"
 packages = [{include = "hhcli"}]

@@ -76,7 +76,7 @@ class HHApiClient:
         self._save_token(new_token_data, user_info)
         log_to_db("INFO", LogSource.API_CLIENT, "Токен успешно обновлен.")
 
-    def authorize(self, profile_name: str):
+    def authorize(self, profile_name: str) -> bool:
         self.profile_name = profile_name
 
         PROXY_BASE_URL = "https://hh.ether-memory.com"
@@ -91,7 +91,7 @@ class HHApiClient:
         except requests.RequestException as e:
             print(f"Критическая ошибка: не удалось получить конфигурацию с сервера: {e}")
             log_to_db("ERROR", LogSource.OAUTH, f"Не удалось получить Client ID с прокси-сервера: {e}")
-            return # Прерываем авторизацию
+            return False
 
         auth_url = (f"{OAUTH_URL}/authorize?response_type=code&"
                     f"client_id={public_client_id}&redirect_uri={REDIRECT_URI}")
@@ -137,6 +137,7 @@ class HHApiClient:
         webbrowser.open(auth_url)
         print("Ожидание успешной аутентификации...")
         server_shutdown_event.wait()
+        return True
 
     def _request(self, method: str, endpoint: str, **kwargs):
         if not self.is_authenticated():

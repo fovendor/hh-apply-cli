@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "hhcli"
-version = "0.2.0"
+version = "0.2.1"
 description = "Неофициальный CLI-клиент для поиска работы и откликов на hh.ru."
 authors = ["fovendor <fovendor@gmail.com>"]
 readme = "README.md"

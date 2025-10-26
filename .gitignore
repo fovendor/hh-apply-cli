@@ -2,6 +2,7 @@
 **/__pycache__/
 *.py[cod]
 *.pyo
+*.sqlite
 
 # Частые кэши инструментов
 .pytest_cache/

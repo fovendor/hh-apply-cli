@@ -18,11 +18,16 @@ def run():
             print(f"Запуск аутентификации для профиля: '{profile_name}'")
 
             client = HHApiClient()
-            client.authorize(profile_name)
-            set_active_profile(profile_name)
+            success = client.authorize(profile_name)
 
-            log_to_db("INFO", "Main", f"Профиль '{profile_name}' успешно создан и активирован.")
-            print(f"Профиль '{profile_name}' успешно создан и активирован.")
+            if success:
+                set_active_profile(profile_name)
+                log_to_db("INFO", "Main", f"Профиль '{profile_name}' успешно создан и активирован.")
+                print(f"Профиль '{profile_name}' успешно создан и активирован.")
+            else:
+                log_to_db("ERROR", "Main", f"Авторизация для профиля '{profile_name}' не удалась.")
+                print(f"Авторизация для профиля '{profile_name}' не удалась. Пожалуйста, проверьте логи и попробуйте снова.")
+
         except IndexError:
             log_to_db("ERROR", "Main", "Команда --auth вызвана без имени профиля.")
             print("Ошибка: после --auth необходимо указать имя профиля. Например: hhcli --auth my_account")

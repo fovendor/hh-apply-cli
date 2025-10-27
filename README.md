@@ -1,6 +1,6 @@
 # hh-cli
 
-[![PyPI version](https://badge.fury.io/py/hhcli.svg)](https://badge.fury.io/py/hhcli)
+[![PyPI version](https://img.shields.io/pypi/v/hhcli.svg)](https://pypi.org/project/hhcli/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Неофициальный CLI-клиент для поиска работы и откликов на hh.ru.

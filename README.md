@@ -2,10 +2,11 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/hhcli.svg)](https://pypi.org/project/hhcli/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Follow on Telegram](https://img.shields.io/badge/Telegram-Join-blue?logo=telegram)](https://t.me/hhcli)
 
 Неофициальный CLI-клиент для поиска работы и откликов на hh.ru.
 
-`hh-cli` — это авторизованное приложение, позволяющее искать вакансии, просматривать их, отмечать понравившиеся и откликаться на них в интерфейсе терминала. 
+`hh-cli` — это авторизованное приложение, позволяющее искать вакансии, просматривать их, отмечать понравившиеся и откликаться на них в интерфейсе терминала. У приложения есть [канал в Telegram](https://t.me/hhcli), где публикуются основные новости проекта.
 
 > **Примечание:** hhcli — это авторизованное (легальное) приложение, одобренное hh.ru, однако, оно разрабатывается независимым разработчиком и не является официальным!
 

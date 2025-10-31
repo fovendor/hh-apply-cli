@@ -41,6 +41,7 @@ from ..database import (
     get_all_profiles,
 )
 from ..reference_data import ensure_reference_data
+from ..client import AuthorizationPending
 from ..constants import (
     ApiErrorReason,
     ConfigKeys,
@@ -652,9 +653,31 @@ class VacancyListScreen(Screen):
             items = (result or {}).get("items", [])
             pages = (result or {}).get("pages", 1)
             self.app.call_from_thread(self._on_vacancies_loaded, items, pages)
+        except AuthorizationPending as auth_exc:
+            log_to_db("WARN", LogSource.VACANCY_LIST_FETCH,
+                      f"Загрузка вакансий остановлена до завершения авторизации: {auth_exc}")
+            self.app.call_from_thread(
+                self.app.notify,
+                "Завершите авторизацию в браузере и повторите загрузку.",
+                title="Авторизация",
+                severity="warning",
+                timeout=4,
+            )
+            self.app.call_from_thread(
+                self._show_authorization_required_message
+            )
         except Exception as e:
             log_to_db("ERROR", LogSource.VACANCY_LIST_FETCH, f"Ошибка загрузки: {e}")
             self.app.notify(f"Ошибка загрузки: {e}", severity="error")
+
+    def _show_authorization_required_message(self) -> None:
+        """Отображает в списке вакансий сообщение о необходимости авторизации."""
+        vacancy_list = self.query_one(VacancySelectionList)
+        vacancy_list.clear_options()
+        vacancy_list.add_option(
+            Selection("Завершите авторизацию в браузере, затем обновите список.", "__none__", disabled=True)
+        )
+        _set_loader_visible(self, "vacancy_loader", False)
 
     def _on_vacancies_loaded(self, items: list, pages: int) -> None:
         """Обработчик успешной загрузки данных."""
@@ -812,6 +835,29 @@ class VacancyListScreen(Screen):
             self.app.call_from_thread(
                 self.display_vacancy_details, details, vacancy_id
             )
+        except AuthorizationPending as auth_exc:
+            log_to_db(
+                "WARN",
+                LogSource.VACANCY_LIST_SCREEN,
+                f"Загрузка деталей вакансии приостановлена: {auth_exc}"
+            )
+            self.app.call_from_thread(
+                self.app.notify,
+                "Авторизуйтесь повторно, чтобы посмотреть детали вакансии.",
+                title="Авторизация",
+                severity="warning",
+                timeout=4,
+            )
+            self.app.call_from_thread(
+                self.query_one("#vacancy_details").update,
+                "Требуется авторизация для просмотра деталей."
+            )
+            self.app.call_from_thread(
+                _set_loader_visible,
+                self,
+                "vacancy_loader",
+                False,
+            )
         except Exception as exc:
             log_to_db("ERROR", LogSource.VACANCY_LIST_SCREEN,
                       f"Ошибка деталей {vacancy_id}: {exc}")
@@ -956,10 +1002,25 @@ class VacancyListScreen(Screen):
 
         for vacancy_id in list(self.selected_vacancies):
             v = self.vacancies_by_id.get(vacancy_id, {})
-            ok, reason_code = self.app.client.apply_to_vacancy(
-                resume_id=self.resume_id,
-                vacancy_id=vacancy_id, message=cover_letter
-            )
+            try:
+                ok, reason_code = self.app.client.apply_to_vacancy(
+                    resume_id=self.resume_id,
+                    vacancy_id=vacancy_id, message=cover_letter
+                )
+            except AuthorizationPending as auth_exc:
+                log_to_db(
+                    "WARN",
+                    LogSource.VACANCY_LIST_SCREEN,
+                    f"Отправка откликов остановлена до завершения авторизации: {auth_exc}"
+                )
+                self.app.call_from_thread(
+                    self.app.notify,
+                    "Авторизуйтесь повторно и повторите отправку откликов.",
+                    title="Авторизация",
+                    severity="warning",
+                    timeout=4,
+                )
+                return
             vac_title = v.get("name", vacancy_id)
             emp = (v.get("employer") or {}).get("name")
 
@@ -1323,6 +1384,23 @@ class NegotiationHistoryScreen(Screen):
                 details,
                 vacancy_id,
             )
+        except AuthorizationPending as auth_exc:
+            log_to_db(
+                "WARN",
+                LogSource.VACANCY_LIST_SCREEN,
+                f"Загрузка деталей отклика приостановлена: {auth_exc}"
+            )
+            self.app.call_from_thread(
+                self.app.notify,
+                "Авторизуйтесь повторно, чтобы просмотреть детали отклика.",
+                title="Авторизация",
+                severity="warning",
+                timeout=4,
+            )
+            self.app.call_from_thread(
+                self._display_details_error,
+                "Требуется авторизация для просмотра деталей."
+            )
         except Exception as exc:
             log_to_db("ERROR", LogSource.VACANCY_LIST_SCREEN, f"Ошибка деталей {vacancy_id}: {exc}")
             self.app.call_from_thread(self._display_details_error, f"Ошибка загрузки: {exc}")
@@ -1614,6 +1692,7 @@ class HHCliApp(App):
             self.sub_title = f"Профиль: {profile_name}"
             profile_config = load_profile_config(profile_name)
             self.css_manager.set_theme(profile_config.get(ConfigKeys.THEME, "hhcli-base"))
+            self.client.ensure_active_token()
 
             self.run_worker(
                 self.cache_dictionaries, thread=True, name="DictCacheWorker"
@@ -1624,7 +1703,7 @@ class HHCliApp(App):
                 title="Синхронизация", timeout=2
             )
             self.run_worker(
-                self.client.sync_negotiation_history,
+                self._sync_history_worker,
                 thread=True, name="SyncWorker"
             )
 
@@ -1641,10 +1720,44 @@ class HHCliApp(App):
                 )
             else:
                 self.push_screen(ResumeSelectionScreen(resume_data=resumes))
+        except AuthorizationPending as auth_exc:
+            log_to_db(
+                "WARN",
+                LogSource.TUI,
+                f"Профиль '{profile_name}' требует повторной авторизации: {auth_exc}"
+            )
+            self.sub_title = f"Профиль: {profile_name} (ожидание авторизации)"
+            self.app.notify(
+                "Требуется повторная авторизация. "
+                "Завершите вход в открывшемся браузере и повторите выбор профиля.",
+                title="Авторизация", severity="warning", timeout=6
+            )
+            all_profiles = get_all_profiles()
+            self.push_screen(
+                ProfileSelectionScreen(all_profiles), self.on_profile_selected
+            )
         except Exception as exc:
             log_to_db("ERROR", LogSource.TUI,
                       f"Критическая ошибка профиля/резюме: {exc}")
             self.exit(result=exc)
+
+    def _sync_history_worker(self) -> None:
+        """Синхронизирует историю откликов, учитывая необходимость авторизации."""
+        try:
+            self.client.sync_negotiation_history()
+        except AuthorizationPending as auth_exc:
+            log_to_db(
+                "WARN",
+                LogSource.SYNC_ENGINE,
+                f"Синхронизация истории остановлена: {auth_exc}"
+            )
+            self.call_from_thread(
+                self.notify,
+                "Авторизация требуется для синхронизации истории откликов.",
+                title="Авторизация",
+                severity="warning",
+                timeout=4,
+            )
 
     async def cache_dictionaries(self) -> None:
         """Проверяет кэш справочников и обновляет его."""
@@ -1663,6 +1776,16 @@ class HHCliApp(App):
                 self.dictionaries = live_dicts
                 log_to_db("INFO", LogSource.TUI,
                           "Справочники успешно закэшированы.")
+            except AuthorizationPending as auth_exc:
+                log_to_db(
+                    "WARN", LogSource.TUI,
+                    f"Не удалось загрузить справочники: {auth_exc}"
+                )
+                self.app.notify(
+                    "Завершите авторизацию, чтобы обновить справочники.",
+                    title="Авторизация", severity="warning", timeout=4
+                )
+                return
             except Exception as e:
                 log_to_db("ERROR", LogSource.TUI,
                           f"Не удалось загрузить справочники: {e}")
@@ -1680,6 +1803,12 @@ class HHCliApp(App):
                     "INFO", LogSource.TUI,
                     "Справочник профессиональных ролей обновлён."
                 )
+        except AuthorizationPending as auth_exc:
+            log_to_db(
+                "WARN",
+                LogSource.TUI,
+                f"Обновление справочников остановлено до завершения авторизации: {auth_exc}"
+            )
         except Exception as exc:
             log_to_db(
                 "ERROR", LogSource.TUI,

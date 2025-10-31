@@ -18,6 +18,10 @@ OAUTH_URL = "https://hh.ru/oauth"
 REDIRECT_URI = "http://127.0.0.1:9037/oauth_callback"
 
 
+class AuthorizationPending(RuntimeError):
+    """Исключение о запуске повторной аутентификации."""
+
+
 class HHApiClient:
     """
     Клиент для взаимодействия с API HeadHunter.
@@ -28,6 +32,9 @@ class HHApiClient:
         self.refresh_token = None
         self.token_expires_at = None
         self.profile_name = None
+        self._auth_lock = threading.Lock()
+        self._auth_thread: threading.Thread | None = None
+        self._last_auth_url: str | None = None
 
     def load_profile_data(self, profile_name: str):
         profile_data = load_profile(profile_name)
@@ -42,6 +49,87 @@ class HHApiClient:
         return (self.access_token is not None and
                 self.token_expires_at > datetime.now())
 
+    def start_authorization_flow(self, *, reason: str | None = None) -> None:
+        """Запускает браузерную авторизацию в отдельном потоке."""
+        if not self.profile_name:
+            raise AuthorizationPending(
+                "Профиль не загружен, авторизация невозможна."
+            )
+
+        with self._auth_lock:
+            if self._auth_thread and self._auth_thread.is_alive():
+                log_to_db(
+                    "INFO",
+                    LogSource.OAUTH,
+                    f"Повторный запрос авторизации для профиля '{self.profile_name}'."
+                )
+                if self._last_auth_url:
+                    webbrowser.open(self._last_auth_url)
+                return
+
+            log_details = f"Причина: {reason}" if reason else "Причина не указана."
+            log_to_db(
+                "INFO",
+                LogSource.OAUTH,
+                f"Запускаю авторизацию через браузер для '{self.profile_name}'. {log_details}"
+            )
+
+            def runner():
+                try:
+                    success = self.authorize(self.profile_name)
+                    if success:
+                        log_to_db(
+                            "INFO",
+                            LogSource.OAUTH,
+                            f"Авторизация профиля '{self.profile_name}' завершена."
+                        )
+                    else:
+                        log_to_db(
+                            "ERROR",
+                            LogSource.OAUTH,
+                            f"Авторизация профиля '{self.profile_name}' завершилась с ошибкой."
+                        )
+                except Exception as exc:
+                    log_to_db(
+                        "ERROR",
+                        LogSource.OAUTH,
+                        f"Исключение внутри авторизации профиля '{self.profile_name}': {exc}"
+                    )
+                finally:
+                    with self._auth_lock:
+                        self._auth_thread = None
+
+            self._auth_thread = threading.Thread(
+                target=runner,
+                name=f"OAuthFlow-{self.profile_name}",
+                daemon=True,
+            )
+            self._auth_thread.start()
+
+    def ensure_active_token(self) -> None:
+        """Гарантирует наличие рабочего access_token или инициирует авторизацию."""
+        if self.is_authenticated():
+            return
+        with self._auth_lock:
+            if self._auth_thread and self._auth_thread.is_alive():
+                raise AuthorizationPending(
+                    "Авторизация уже идёт в браузере. Завершите её и повторите действие."
+                )
+        try:
+            self._refresh_token()
+        except AuthorizationPending:
+            raise
+        except Exception as exc:
+            log_to_db(
+                "ERROR",
+                LogSource.API_CLIENT,
+                f"Не удалось обновить токен для '{self.profile_name}': {exc}"
+            )
+            self.start_authorization_flow(reason="refresh_failed")
+            raise AuthorizationPending(
+                "Срок действия токена истёк. Открыта страница авторизации в браузере."
+            ) from exc
+
     def _save_token(self, token_data: dict, user_info: dict):
         expires_in = token_data.get("expires_in", 3600)
         expires_at = datetime.now() + timedelta(seconds=expires_in)
@@ -55,9 +143,12 @@ class HHApiClient:
     def _refresh_token(self):
         if not self.refresh_token:
             msg = (f"Нет refresh_token для обновления "
-                   f"профиля '{self.profile_name}'.")
+                   f"профиля '{self.profile_name}'. Запускаю переавторизацию.")
             log_to_db("ERROR", LogSource.API_CLIENT, msg)
-            raise Exception(msg)
+            self.start_authorization_flow(reason="missing_refresh_token")
+            raise AuthorizationPending(
+                "Не найден refresh_token. Открыта страница авторизации."
+            )
         log_to_db("INFO", LogSource.API_CLIENT,
                   f"Токен для профиля '{self.profile_name}' истек, обновляю...")
         payload = {
@@ -70,7 +161,21 @@ class HHApiClient:
         except requests.HTTPError as e:
             log_to_db("ERROR", LogSource.API_CLIENT,
                       f"Ошибка обновления токена: {e.response.text}")
-            raise e
+            error_details = {}
+            try:
+                error_details = e.response.json()
+            except Exception:
+                pass
+            if (
+                e.response.status_code in (400, 401)
+                and error_details.get("error") == "invalid_grant"
+            ):
+                self.start_authorization_flow(reason="invalid_grant")
+                raise AuthorizationPending(
+                    "Не удалось обновить токен. "
+                    "Откройте вкладку авторизации в браузере."
+                ) from e
+            raise
         new_token_data = response.json()
         user_info = load_profile(self.profile_name)
         self._save_token(new_token_data, user_info)
@@ -95,6 +200,7 @@ class HHApiClient:
 
         auth_url = (f"{OAUTH_URL}/authorize?response_type=code&"
                     f"client_id={public_client_id}&redirect_uri={REDIRECT_URI}")
+        self._last_auth_url = auth_url
         server_shutdown_event = threading.Event()
         app = Flask(__name__)
 
@@ -140,16 +246,11 @@ class HHApiClient:
         return True
 
     def _request(self, method: str, endpoint: str, **kwargs):
-        if not self.is_authenticated():
-            try:
-                self._refresh_token()
-            except Exception as e:
-                msg = ("Не удалось обновить токен. "
-                       "Авторизация не удалась. Ошибка: {e}")
-                log_to_db("ERROR", LogSource.API_CLIENT, msg)
-                raise ConnectionError(
-                    "Не удалось обновить токен. Попробуйте пере-авторизоваться."
-                ) from e
+        try:
+            self.ensure_active_token()
+        except AuthorizationPending as pending:
+            log_to_db("ERROR", LogSource.API_CLIENT, str(pending))
+            raise
         headers = kwargs.setdefault("headers", {})
         headers["Authorization"] = f"Bearer {self.access_token}"
         url = f"{API_BASE_URL}{endpoint}"
@@ -164,16 +265,18 @@ class HHApiClient:
                 log_to_db(
                     "WARN", LogSource.API_CLIENT,
                     f"Получен 401 Unauthorized для {endpoint}. "
-                    f"Попытка обновить токен."
+                    "Повторная попытка после обновления токена."
                 )
                 try:
-                    self._refresh_token()
+                    self.ensure_active_token()
                     headers["Authorization"] = f"Bearer {self.access_token}"
                     response = requests.request(method, url, **kwargs)
                     response.raise_for_status()
                     if response.status_code in (201, 204):
                         return None
                     return response.json()
+                except AuthorizationPending:
+                    raise
                 except Exception as refresh_e:
                     msg = ("Повторная попытка обновления токена не удалась. "
                            f"Ошибка: {refresh_e}")
@@ -182,13 +285,12 @@ class HHApiClient:
                         "Не удалось обновить токен. "
                         "Попробуйте пере-авторизоваться."
                     ) from refresh_e
-            else:
-                log_to_db(
-                    "ERROR", LogSource.API_CLIENT,
-                    f"HTTP ошибка для {method} {endpoint}: "
-                    f"{e.response.status_code} {e.response.text}"
-                )
-                raise e
+            log_to_db(
+                "ERROR", LogSource.API_CLIENT,
+                f"HTTP ошибка для {method} {endpoint}: "
+                f"{e.response.status_code} {e.response.text}"
+            )
+            raise e
 
     def get_my_resumes(self):
         return self._request("GET", "/resumes/mine")

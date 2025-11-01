@@ -425,6 +425,9 @@ class ConfigScreen(Screen):
         self._initial_config: dict[str, Any] = {}
         self._form_loaded = False
         self._confirm_dialog_active = False
+        self._initial_theme_name: str | None = None
+        self._preview_theme_name: str | None = None
+        self._theme_committed: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="config_screen"):
@@ -613,6 +616,10 @@ class ConfigScreen(Screen):
             ]
         )
         theme_select.value = config.get(ConfigKeys.THEME, "hhcli-base")
+        current_theme_name = self.app.css_manager.theme._name
+        self._initial_theme_name = current_theme_name
+        self._preview_theme_name = current_theme_name
+        self._theme_committed = False
         self._populate_layout_settings(config, defaults)
         self._initial_config = self._current_form_config()
         self._form_loaded = True
@@ -653,6 +660,40 @@ class ConfigScreen(Screen):
     def _beautify_theme_name(theme_name: str) -> str:
         name = theme_name.removeprefix("hhcli-").replace("-", " ")
         return name.title() or theme_name
+
+    def _apply_theme_preview(self, theme_name: str | None) -> None:
+        if not self.app or not self.app.css_manager:
+            return
+        theme_key = (theme_name or "hhcli-base").strip() or "hhcli-base"
+        if self._preview_theme_name == theme_key:
+            return
+        try:
+            self.app.css_manager.set_theme(theme_key)
+            self._preview_theme_name = theme_key
+        except ValueError:
+            log_to_db(
+                "WARN",
+                LogSource.CONFIG_SCREEN,
+                f"Предпросмотр темы '{theme_key}' недоступен.",
+            )
+
+    def _revert_theme_preview(self) -> None:
+        if not self.app or not self.app.css_manager:
+            return
+        target = (self._initial_theme_name or "hhcli-base").strip() or "hhcli-base"
+        if self._preview_theme_name == target:
+            return
+        try:
+            self.app.css_manager.set_theme(target)
+            self._preview_theme_name = target
+        except ValueError:
+            log_to_db(
+                "WARN",
+                LogSource.CONFIG_SCREEN,
+                f"Возврат темы '{target}' невозможен, применяется базовая.",
+            )
+            self.app.css_manager.set_theme("hhcli-base")
+            self._preview_theme_name = "hhcli-base"
 
     def _make_layout_row(self, label_text: str, input_id: str) -> Horizontal:
         return Horizontal(
@@ -730,6 +771,13 @@ class ConfigScreen(Screen):
         elif event.button.id == "roles_picker":
             self._open_roles_picker()
 
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != "theme":
+            return
+        if not self._form_loaded:
+            return
+        self._apply_theme_preview(str(event.value) if event.value else "hhcli-base")
+
     def _open_area_picker(self) -> None:
         if not self._areas:
             self.app.notify("Справочник городов пуст.", severity="warning")
@@ -777,7 +825,10 @@ class ConfigScreen(Screen):
         config = self._current_form_config()
 
         save_profile_config(profile_name, config)
-        self.app.css_manager.set_theme(config[ConfigKeys.THEME])
+        self.app.apply_theme_from_profile(profile_name)
+        self._theme_committed = True
+        self._initial_theme_name = self.app.css_manager.theme._name
+        self._preview_theme_name = self._initial_theme_name
         self.app.notify("Настройки успешно сохранены.", title="Успех", severity="information")
         self.dismiss(True)
 
@@ -787,3 +838,8 @@ class ConfigScreen(Screen):
             self.action_save_config()
         elif decision == "discard":
             self.dismiss(False)
+
+    def dismiss(self, result=None) -> None:  # type: ignore[override]
+        if not self._theme_committed:
+            self._revert_theme_preview()
+        super().dismiss(result)

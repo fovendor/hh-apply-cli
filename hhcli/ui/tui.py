@@ -39,6 +39,7 @@ from ..database import (
     get_dictionary_from_cache,
     save_dictionary_to_cache,
     get_all_profiles,
+    get_active_profile_name,
 )
 from ..reference_data import ensure_reference_data
 from ..client import AuthorizationPending
@@ -619,6 +620,7 @@ class VacancyListScreen(Screen):
 
     def on_screen_resume(self) -> None:
         """При возврате фокусируем список вакансий без принудительного обновления."""
+        self.app.apply_theme_from_profile(self.app.client.profile_name)
         self.query_one(VacancySelectionList).focus()
 
     def _fetch_and_refresh_vacancies(self, page: int) -> None:
@@ -1145,6 +1147,7 @@ class NegotiationHistoryScreen(Screen):
         self._refresh_history()
 
     def on_screen_resume(self) -> None:
+        self.app.apply_theme_from_profile(self.app.client.profile_name)
         self._reload_history_layout_preferences()
         self._apply_history_workspace_widths()
         self._update_history_header()
@@ -1531,6 +1534,9 @@ class ResumeSelectionScreen(Screen):
             )
         )
 
+    def on_screen_resume(self) -> None:
+        self.app.apply_theme_from_profile(self.app.client.profile_name)
+
 
 class SearchModeScreen(Screen):
     """Выбор режима поиска: авто или ручной."""
@@ -1570,6 +1576,9 @@ class SearchModeScreen(Screen):
     def action_edit_config(self) -> None:
         """Открыть экран редактирования конфигурации."""
         self.app.push_screen(ConfigScreen())
+
+    def on_screen_resume(self) -> None:
+        self.app.apply_theme_from_profile(self.app.client.profile_name)
 
     def action_run_search(self, mode: str) -> None:
         log_to_db("INFO", LogSource.SEARCH_MODE_SCREEN, f"Выбран режим '{mode}'")
@@ -1648,9 +1657,35 @@ class HHCliApp(App):
         self.css_manager = CSS_MANAGER
         self.title = "hh-cli"
 
+    def apply_theme_from_profile(self, profile_name: Optional[str] = None) -> None:
+        """Применяет тему, указанную в конфигурации профиля."""
+        theme_name: Optional[str] = None
+        if profile_name:
+            try:
+                profile_config = load_profile_config(profile_name)
+                theme_name = profile_config.get(ConfigKeys.THEME)
+            except Exception as exc:  # pragma: no cover - логируем и используем запасной вариант
+                log_to_db(
+                    "WARN",
+                    LogSource.TUI,
+                    f"Не удалось загрузить тему профиля '{profile_name}': {exc}",
+                )
+        if not theme_name:
+            defaults = get_default_config()
+            theme_name = defaults.get(ConfigKeys.THEME, "hhcli-base")
+        try:
+            self.css_manager.set_theme(theme_name or "hhcli-base")
+        except ValueError:
+            self.css_manager.set_theme("hhcli-base")
+
     async def on_mount(self) -> None:
         log_to_db("INFO", LogSource.TUI, "Приложение смонтировано")
         all_profiles = get_all_profiles()
+        active_profile = get_active_profile_name()
+        theme_profile = active_profile
+        if not theme_profile and all_profiles:
+            theme_profile = all_profiles[0]["profile_name"]
+        self.apply_theme_from_profile(theme_profile)
 
         if not all_profiles:
             self.exit(
@@ -1690,8 +1725,7 @@ class HHCliApp(App):
         try:
             self.client.load_profile_data(profile_name)
             self.sub_title = f"Профиль: {profile_name}"
-            profile_config = load_profile_config(profile_name)
-            self.css_manager.set_theme(profile_config.get(ConfigKeys.THEME, "hhcli-base"))
+            self.apply_theme_from_profile(profile_name)
             self.client.ensure_active_token()
 
             self.run_worker(

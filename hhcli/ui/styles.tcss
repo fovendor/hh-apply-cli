@@ -1,34 +1,80 @@
+/* --- 0. Дизайн-система: токены компонентов --- */
+
+$surface-app: $background1;
+$surface-panel: $background2;
+$surface-elevated: $background3;
+
+$text-muted: $foreground1;
+$text-base: $foreground2;
+$text-strong: $foreground3;
+$text-disabled: $foreground2 50%;
+
+$border-subtle: $background3;
+$border-strong: $foreground1;
+
+$accent-primary: $primary;
+$accent-primary-soft: $primary 35%;
+$accent-secondary: $secondary;
+$accent-secondary-soft: $secondary 40%;
+
+$status-success: $green;
+$status-warning: $yellow;
+$status-error: $red;
+$status-info: $secondary;
+
+$focus-ring: $primary;
+$selection-surface: $surface-elevated 35%;
+
+$overlay-scrim: $scrim;
+
+$control-background: $surface-panel;
+$control-border: $border-subtle;
+$control-text: $text-strong;
+$control-placeholder: $text-base;
+
 /* --- 1. Глобальные стили и стили по-умолчанию --- */
 
 * {
     scrollbar-size: 1 1;
-    scrollbar-background: $background3;
-    scrollbar-color: $primary;
-    scrollbar-background-hover: $background2;
-    scrollbar-color-hover: $secondary;
-    link-color: $primary;
+    scrollbar-background: $surface-elevated;
+    scrollbar-color: $accent-primary;
+    scrollbar-background-hover: $surface-panel;
+    scrollbar-color-hover: $accent-secondary;
+    link-color: $accent-primary;
 }
 
 Screen {
-    background: $background1;
-    color: $foreground2;
+    background: $surface-app;
+    color: $text-base;
 }
 
 Static, Label {
-    color: $foreground3;
+    color: $text-strong;
 }
 
 Markdown {
-    background: $background2;
-    color: $foreground3;
+    background: $surface-panel;
+    color: $text-strong;
     padding: 0 1;
-    border: round $background3;
+    border: round $border-subtle;
     border-title-align: left;
+}
+
+Markdown h1,
+Markdown h2,
+Markdown h3,
+Markdown h4,
+Markdown h5,
+Markdown h6 {
+    background: transparent;
+    color: $text-strong;
+    border: none;
+    text-style: bold;
 }
 
 LoadingIndicator,
 .loading-indicator {
-    color: $secondary;
+    color: $accent-secondary;
 }
 
 
@@ -40,8 +86,8 @@ LoadingIndicator,
 }
 
 Footer {
-    background: $background2;
-    color: $foreground1;
+    background: $surface-panel;
+    color: $text-muted;
     dock: bottom;
     height: auto;
     min-height: 1;
@@ -49,24 +95,24 @@ Footer {
 }
 
 Footer > .footer--description {
-    color: $foreground2;
+    color: $text-base;
 }
 
 Footer > .footer--key {
-    background: $background3 60%;
-    color: $foreground3;
+    background: $surface-elevated 60%;
+    color: $text-strong;
     text-style: bold;
 }
 
 Footer > .footer--highlight {
-    background: $primary 35%;
-    color: $foreground3;
+    background: $accent-primary-soft;
+    color: $text-strong;
     text-style: bold;
 }
 
 Footer > .footer--highlight-key {
-    background: $primary;
-    color: $background1;
+    background: $accent-primary;
+    color: $surface-app;
     text-style: bold;
 }
 
@@ -74,10 +120,10 @@ Footer > .footer--highlight-key {
 /* --- 3. Экран просмотра вакансий --- */
 
 .pane {
-    background: $background2;
-    border: round $background3;
-    border-title-color: $foreground1;
-    border-title-background: $background3;
+    background: $surface-panel;
+    border: round $border-subtle;
+    border-title-color: $text-muted;
+    border-title-background: $surface-elevated;
     border-title-align: left;
     padding: 1 0 0 0;
     margin: 0;
@@ -116,14 +162,14 @@ Footer > .footer--highlight-key {
 
 #vacancy_list_header {
     background: transparent;
-    color: $foreground2;
+    color: $text-base;
     padding: 0 0 0 4;
     text-style: bold;
 }
 
 #history_list_header {
     background: transparent;
-    color: $foreground2;
+    color: $text-base;
     padding: 0 0 0 1;
     text-style: bold;
 }
@@ -153,20 +199,20 @@ SelectionList > .selection-list--button-selected-highlighted {
 
 SelectionList > .selection-list--button-highlighted,
 SelectionList > .selection-list--button-selected-highlighted {
-    background: $background3 35%;
+    background: $selection-surface;
 }
 
 SelectionList > .selection-list--button-selected,
 SelectionList > .selection-list--button-selected-highlighted {
-    color: $primary;
+    color: $accent-primary;
 }
 
 DataTable {
     background: transparent;
-    color: $foreground3;
+    color: $text-strong;
     border: none;
-    scrollbar-color: $primary;
-    scrollbar-background: $background3 60%;
+    scrollbar-color: $accent-primary;
+    scrollbar-background: $selection-surface;
 }
 
 DataTable:focus {
@@ -174,8 +220,8 @@ DataTable:focus {
 }
 
 DataTable > .datatable--header {
-    background: $background3;
-    color: $foreground1;
+    background: $surface-elevated;
+    color: $text-muted;
 }
 
 #resume_table,
@@ -188,13 +234,13 @@ DataTable > .datatable--header {
 
 #config-form {
     padding: 1 2;
-    background: $background2;
-    border: round $background3;
+    background: $surface-panel;
+    border: round $border-subtle;
 }
 
 #config-form > .header {
-    background: $background3;
-    color: $foreground1;
+    background: $surface-elevated;
+    color: $text-muted;
     padding: 1;
     margin: 1 0;
     text-style: bold;
@@ -204,20 +250,20 @@ DataTable > .datatable--header {
 /* Элементы формы: Поля ввода */
 Input,
 TextArea {
-    background: $background2;
-    color: $foreground3;
-    border: round $background3;
+    background: $control-background;
+    color: $control-text;
+    border: round $control-border;
     padding: 0;
 }
 
 Input:focus,
 TextArea:focus {
-    border: round $primary;
+    border: round $focus-ring;
 }
 
 TextArea {
     min-height: 12;
-    scrollbar-color: $secondary;
+    scrollbar-color: $accent-secondary;
 }
 
 #cover_letter {
@@ -226,12 +272,12 @@ TextArea {
 
 /* Элементы формы: Переключатели */
 Switch {
-    background: $background1;
-    border: round $background3;
+    background: $surface-app;
+    border: round $control-border;
 }
 
 Switch:focus {
-    border: round $primary;
+    border: round $focus-ring;
 }
 
 .switch-container {
@@ -259,28 +305,28 @@ Select {
 }
 
 SelectCurrent {
-    background: $background2;
-    color: $foreground3;
-    border: round $background3;
+    background: $control-background;
+    color: $control-text;
+    border: round $control-border;
     padding: 0 1;
 }
 
 SelectCurrent Static#label {
-    color: $foreground2;
+    color: $control-placeholder;
     background: transparent;
 }
 
 SelectCurrent.-has-value Static#label {
-    color: $foreground3;
+    color: $control-text;
 }
 
 SelectCurrent .arrow {
-    color: $foreground2;
+    color: $control-placeholder;
     background: transparent;
 }
 
 Select:focus > SelectCurrent {
-    border: round $primary;
+    border: round $focus-ring;
 }
 
 Select > SelectOverlay {
@@ -288,34 +334,34 @@ Select > SelectOverlay {
 }
 
 SelectOverlay {
-    background: $background2;
-    color: $foreground3;
-    border: round $background3;
+    background: $surface-panel;
+    color: $text-strong;
+    border: round $control-border;
     padding: 0 1;
 }
 
 SelectOverlay:focus {
-    border: round $primary;
+    border: round $focus-ring;
 }
 
 SelectOverlay > .option-list--option {
     background: transparent;
-    color: $foreground3;
+    color: $text-strong;
 }
 
 SelectOverlay > .option-list--option-highlighted,
 SelectOverlay > .option-list--option-hover,
 SelectOverlay:focus > .option-list--option-highlighted,
 SelectOverlay > .option-list--option-hover-highlighted {
-    background: $background3 40%;
-    color: $foreground1;
+    background: $selection-surface;
+    color: $text-base;
 }
 
 SelectOverlay > .option-list--option-disabled,
 SelectOverlay > .option-list--option-highlighted-disabled,
 SelectOverlay > .option-list--option-hover-disabled,
 SelectOverlay > .option-list--option-hover-highlighted-disabled {
-    color: $foreground2 50%;
+    color: $text-disabled;
     background: transparent;
 }
 
@@ -326,7 +372,7 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
 
 .value-display {
     padding: 0 0 1 0;
-    color: $foreground3;
+    color: $text-strong;
 }
 
 #pickers-container {
@@ -340,9 +386,9 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
 .picker-group {
     height: auto;
     padding: 0 1 1 1;
-    border: round $background3;
+    border: round $border-subtle;
     width: 1fr;
-    background: $background2;
+    background: $surface-panel;
 }
 
 .picker-group .summary-label {
@@ -361,8 +407,8 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
 
 /* Элементы формы: Модальные окна выбора */
 .picker {
-    background: $background2;
-    border: round $background3;
+    background: $surface-panel;
+    border: round $border-subtle;
     padding: 1;
     height: auto;
 }
@@ -377,7 +423,7 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
 }
 
 .picker__hint {
-    color: $foreground2;
+    color: $text-base;
     padding-top: 1;
 }
 
@@ -395,11 +441,11 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
 .display-settings-group {
     height: 26;
     padding: 1;
-    border: round $background3;
-    border-title-color: $foreground1;
-    border-title-background: $background3;
+    border: round $border-subtle;
+    border-title-color: $text-muted;
+    border-title-background: $surface-elevated;
     width: 1fr;
-    background: $background2;
+    background: $surface-panel;
 }
 
 .display-settings-row {
@@ -413,21 +459,21 @@ SelectOverlay > .option-list--option-hover-highlighted-disabled {
 .display-settings-label {
     width: 1fr;
     height: 100%;
-    color: $foreground1;
+    color: $text-muted;
     content-align: left middle;
 }
 
 .display-settings-input {
     width: 12;
-    background: $background2;
-    border: round $background3;
+    background: $control-background;
+    border: round $control-border;
     text-align: right;
-    color: $foreground3;
+    color: $control-text;
     margin: 0;
 }
 
 .display-settings-input:focus {
-    border: round $primary;
+    border: round $focus-ring;
 }
 
 /* --- 6. Модальное подтверждение настроек --- */
@@ -436,7 +482,7 @@ ConfigUnsavedChangesDialog,
 ApplyConfirmationDialog {
     layer: modal;
     align: center middle;
-    background: rgba(0, 0, 0, 0.65);
+    background: $overlay-scrim;
 }
 
 ConfigUnsavedChangesDialog #config-confirm-center {
@@ -451,14 +497,14 @@ ApplyConfirmationDialog #config-confirm-center {
 
 ConfigUnsavedChangesDialog #config-confirm-dialog,
 ApplyConfirmationDialog #config-confirm-dialog {
-    border-title-color: $primary;
-    background: $background2;
-    border: round $primary;
+    border-title-color: $accent-primary;
+    background: $surface-panel;
+    border: round $accent-primary;
 }
 
 ConfigUnsavedChangesDialog #config-confirm-dialog > .config-confirm__message,
 ApplyConfirmationDialog #config-confirm-dialog > .config-confirm__message {
-    color: $foreground3;
+    color: $text-strong;
     text-style: bold;
     text-align: center;
     content-align: center middle;
@@ -488,7 +534,7 @@ ApplyConfirmationDialog #apply_confirm_input {
 
 ApplyConfirmationDialog #apply_confirm_error {
     min-height: 2;
-    color: $red;
+    color: $status-error;
     text-align: center;
     content-align: center middle;
     padding-bottom: 1;
@@ -509,7 +555,7 @@ ApplyConfirmationDialog #apply_confirm_error {
 
 #history_list .option-list--option-highlighted,
 #history_list .option-list--option-hover-highlighted {
-    background: $background3 35%;
+    background: $selection-surface;
 }
 
 
@@ -517,55 +563,55 @@ ApplyConfirmationDialog #apply_confirm_error {
 
 /* Кнопки */
 Button {
-    background: $background2;
-    color: $foreground1;
-    border: round $background3;
+    background: $control-background;
+    color: $text-base;
+    border: round $control-border;
     text-style: bold;
 }
 
 Button:hover {
-    background: $background2;
-    color: $foreground3;
-    border: round $primary;
+    background: $control-background;
+    color: $text-strong;
+    border: round $focus-ring;
     text-style: bold;
 }
 
 Button:focus {
-    border: round $foreground1;
+    border: round $border-strong;
 }
 
 Button.-success {
     margin: 1 0 0 0;
-    background: $background2;
-    color: $green;
-    border: round $background3;
+    background: $control-background;
+    color: $status-success;
+    border: round $control-border;
 }
 
 Button.-success:hover {
-    border: round $green;
-    color: $green;
+    border: round $status-success;
+    color: $status-success;
 }
 
 Button.-success:focus {
-    color: $foreground3;
-    border: round $green;
+    color: $text-strong;
+    border: round $status-success;
 }
 
 Button.decline {
     margin: 1 0 0 0;
-    background: $background2;
-    color: $red;
-    border: round $background3;
+    background: $control-background;
+    color: $status-error;
+    border: round $control-border;
 }
 
 Button.decline:hover {
-    border: round $red;
-    color: $red;
+    border: round $status-error;
+    color: $status-error;
 }
 
 Button.decline:focus {
-    color: $foreground3;
-    border: round $red;
+    color: $text-strong;
+    border: round $status-error;
 }
 
 /* Пагинация */
@@ -583,44 +629,44 @@ Pagination > Button {
     border: none;
     padding: 0 1;
     margin: 0 1;
-    background: $background3;
+    background: $surface-elevated;
 }
 
 Pagination > Button:hover {
-    background: $secondary 40%;
+    background: $accent-secondary-soft;
     border: none;
 }
 
 Pagination > Button.-primary,
 Pagination > Button.-primary:hover {
-    background: $primary;
-    color: $background1;
+    background: $accent-primary;
+    color: $surface-app;
     text-style: bold;
 }
 
 Pagination > Button:focus {
     border: none;
-    background: $primary;
-    color: $background1;
+    background: $accent-primary;
+    color: $surface-app;
 }
 
 
 /* --- 8. Уведомления --- */
 
 Notification {
-    background: $background3;
-    color: $foreground3;
-    border: round $primary;
+    background: $surface-panel;
+    color: $text-strong;
+    border: round $accent-primary;
 }
 
 Notification.-information {
-    border: round $secondary;
+    border: round $status-info;
 }
 
 Notification.-warning {
-    border: round $yellow;
+    border: round $status-warning;
 }
 
 Notification.-error {
-    border: round $red;
+    border: round $status-error;
 }

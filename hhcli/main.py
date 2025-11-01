@@ -52,6 +52,7 @@ def run():
         return
 
     app = HHCliApp(client=client)
+    app.apply_theme_from_profile(active_profile)
 
     log_to_db("INFO", "Main", "Запуск TUI.")
     result = app.run()

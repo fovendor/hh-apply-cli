@@ -28,16 +28,19 @@ class CssManager:
     """Отвечает за генерацию и кэширование итогового CSS."""
 
     base_css: Path = BASE_PATH / "styles.tcss"
-    themes: dict[str, HHCliThemeBase] = {
-        name: theme_cls()
-        for name, theme_cls in AVAILABLE_THEMES.items()
-    }
+    themes: dict[str, HHCliThemeBase] = {}
 
     def __init__(
         self,
         theme: Optional[HHCliThemeBase] = None,
         cache_path: Path = _cache_root,
     ) -> None:
+        if not self.themes:
+            self.themes = {
+                name: theme_cls()
+                for name, theme_cls in AVAILABLE_THEMES.items()
+            }
+
         self.theme: HHCliThemeBase = theme or self.themes["hhcli-base"]
         self.cache_path = cache_path
         self.stylesheets: Path = self.cache_path / "stylesheets"

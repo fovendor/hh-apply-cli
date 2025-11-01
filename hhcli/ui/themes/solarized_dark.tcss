@@ -1,0 +1,21 @@
+$background1: #002B36;
+$background2: #073642;
+$background3: #0A3946;
+
+$foreground1: #839496;
+$foreground2: #93A1A1;
+$foreground3: #EEE8D5;
+
+$red: #DC322F;
+$orange: #CB4B16;
+$yellow: #B58900;
+$green: #859900;
+$blue: #268BD2;
+$purple: #6C71C4;
+$magenta: #D33682;
+$cyan: #2AA198;
+
+$primary: #2AA198;
+$secondary: #268BD2;
+
+$scrim: rgba(0, 43, 54, 0.75);

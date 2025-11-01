@@ -1,9 +1,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import re
+from typing import ClassVar
+
+from .themes import THEMES_DIR
+
+_VARIABLE_RE = re.compile(r"^\s*\$(?P<name>[A-Za-z0-9_-]+)\s*:\s*(?P<value>[^;]+);$")
+
+_CSS_CACHE: dict[type["HHCliThemeBase"], str] = {}
+_COLORS_CACHE: dict[type["HHCliThemeBase"], dict[str, str]] = {}
 
 
-@dataclass
+def _parse_variables(css: str) -> dict[str, str]:
+    variables: dict[str, str] = {}
+    for raw_line in css.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("/*") or line.startswith("//"):
+            continue
+        match = _VARIABLE_RE.match(line)
+        if match:
+            variables[match.group("name")] = match.group("value").strip()
+    return variables
+
+
+@dataclass(slots=True)
 class ThemeDefinition:
     """Упрощённое представление темы для внешнего использования."""
 
@@ -12,121 +34,123 @@ class ThemeDefinition:
 
 
 class HHCliThemeBase:
-    """Базовая тема hhcli. Совместима с API dooit."""
+    """Базовый класс определения темы оформления."""
 
-    _name: str = "hhcli-base"
+    _name: ClassVar[str] = "hhcli-base"
+    css_filename: ClassVar[str] = "base.tcss"
 
-    # background colors
-    background1: str = "#2E3440"  # Darkest
-    background2: str = "#3B4252"  # Lighter
-    background3: str = "#434C5E"  # Lightest
-
-    # foreground colors
-    foreground1: str = "#D8DEE9"  # Darkest
-    foreground2: str = "#E5E9F0"  # Lighter
-    foreground3: str = "#ECEFF4"  # Lightest
-
-    # other colors
-    red: str = "#BF616A"
-    orange: str = "#D08770"
-    yellow: str = "#EBCB8B"
-    green: str = "#A3BE8C"
-    blue: str = "#81A1C1"
-    purple: str = "#B48EAD"
-    magenta: str = "#B48EAD"
-    cyan: str = "#8FBCBB"
-
-    # accent colors
-    primary: str = cyan
-    secondary: str = blue
+    def __init__(self) -> None:
+        self.css_path: Path = self._get_css_path()
+        self.css: str = self._load_css()
+        self.colors: dict[str, str] = self._load_colors()
 
     @classmethod
-    def to_css(cls) -> str:
-        """Конвертирует тему в набор CSS-переменных."""
-        return (
-            f"$background1: {cls.background1};\n"
-            f"$background2: {cls.background2};\n"
-            f"$background3: {cls.background3};\n\n"
-            f"$foreground1: {cls.foreground1};\n"
-            f"$foreground2: {cls.foreground2};\n"
-            f"$foreground3: {cls.foreground3};\n\n"
-            f"$red: {cls.red};\n"
-            f"$orange: {cls.orange};\n"
-            f"$yellow: {cls.yellow};\n"
-            f"$green: {cls.green};\n"
-            f"$blue: {cls.blue};\n"
-            f"$purple: {cls.purple};\n"
-            f"$magenta: {cls.magenta};\n"
-            f"$cyan: {cls.cyan};\n\n"
-            f"$primary: {cls.primary};\n"
-            f"$secondary: {cls.secondary};\n"
-        )
+    def _get_css_path(cls) -> Path:
+        path = Path(cls.css_filename)
+        if not path.is_absolute():
+            path = THEMES_DIR / path
+        return path
+
+    @classmethod
+    def _load_css(cls) -> str:
+        try:
+            return _CSS_CACHE[cls]
+        except KeyError:
+            css = cls._get_css_path().read_text(encoding="utf8")
+            _CSS_CACHE[cls] = css
+            return css
+
+    @classmethod
+    def _load_colors(cls) -> dict[str, str]:
+        try:
+            return dict(_COLORS_CACHE[cls])
+        except KeyError:
+            css = cls._load_css()
+            colors = _parse_variables(css)
+            _COLORS_CACHE[cls] = colors
+            return dict(colors)
+
+    def to_css(self) -> str:
+        """Возвращает CSS-переменные темы."""
+        return self.css
 
     @classmethod
     def definition(cls) -> ThemeDefinition:
         """Возвращает сериализованное представление темы."""
-        return ThemeDefinition(
-            name=cls._name,
-            colors={
-                "background1": cls.background1,
-                "background2": cls.background2,
-                "background3": cls.background3,
-                "foreground1": cls.foreground1,
-                "foreground2": cls.foreground2,
-                "foreground3": cls.foreground3,
-                "red": cls.red,
-                "orange": cls.orange,
-                "yellow": cls.yellow,
-                "green": cls.green,
-                "blue": cls.blue,
-                "purple": cls.purple,
-                "magenta": cls.magenta,
-                "cyan": cls.cyan,
-                "primary": cls.primary,
-                "secondary": cls.secondary,
-            },
-        )
+        return ThemeDefinition(name=cls._name, colors=cls._load_colors())
 
 
 class Nord(HHCliThemeBase):
-    """Стандартная тема в стиле dooit."""
+    """Стандартная тема по мотивам Nord."""
 
     _name = "hhcli-nord"
+    css_filename = "nord.tcss"
 
 
 class SolarizedDark(HHCliThemeBase):
-    """Альтернативная тема по мотивам solarized dark."""
+    """Альтернативная тема по мотивам Solarized Dark."""
 
     _name = "hhcli-solarized-dark"
+    css_filename = "solarized_dark.tcss"
 
-    background1 = "#002b36"
-    background2 = "#073642"
-    background3 = "#0a3946"
 
-    foreground1 = "#839496"
-    foreground2 = "#93a1a1"
-    foreground3 = "#eee8d5"
+class Dracula(HHCliThemeBase):
+    """Популярная тёмная тема Dracula."""
 
-    red = "#dc322f"
-    orange = "#cb4b16"
-    yellow = "#b58900"
-    green = "#859900"
-    blue = "#268bd2"
-    purple = "#6c71c4"
-    magenta = "#d33682"
-    cyan = "#2aa198"
+    _name = "hhcli-dracula"
+    css_filename = "dracula.tcss"
 
-    primary = cyan
-    secondary = blue
+
+class Monokai(HHCliThemeBase):
+    """Классическая тема Monokai."""
+
+    _name = "hhcli-monokai"
+    css_filename = "monokai.tcss"
+
+
+class GruvboxDark(HHCliThemeBase):
+    """Тёмная тема Gruvbox."""
+
+    _name = "hhcli-gruvbox-dark"
+    css_filename = "gruvbox_dark.tcss"
+
+
+class OneDark(HHCliThemeBase):
+    """Тема Atom One Dark."""
+
+    _name = "hhcli-one-dark"
+    css_filename = "one_dark.tcss"
+
+
+class GithubLight(HHCliThemeBase):
+    """Светлая тема в стиле GitHub Light."""
+
+    _name = "hhcli-github-light"
+    css_filename = "github_light.tcss"
+
+
+class TokyoNight(HHCliThemeBase):
+    """Тёмная тема Tokyo Night."""
+
+    _name = "hhcli-tokyo-night"
+    css_filename = "tokyo_night.tcss"
+
+
+_THEME_CLASSES: tuple[type[HHCliThemeBase], ...] = (
+    HHCliThemeBase,
+    Nord,
+    SolarizedDark,
+    Dracula,
+    Monokai,
+    GruvboxDark,
+    OneDark,
+    GithubLight,
+    TokyoNight,
+)
 
 
 AVAILABLE_THEMES: dict[str, type[HHCliThemeBase]] = {
-    theme._name: theme
-    for theme in (
-        HHCliThemeBase,
-        Nord,
-        SolarizedDark,
-    )
+    theme._name: theme for theme in _THEME_CLASSES
 }
 
 

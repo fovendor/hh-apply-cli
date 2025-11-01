@@ -1,16 +1,41 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import ClassVar
 
 from .themes import THEMES_DIR
 
 _VARIABLE_RE = re.compile(r"^\s*\$(?P<name>[A-Za-z0-9_-]+)\s*:\s*(?P<value>[^;]+);$")
+_SAFE_NAME_RE = re.compile(r"[^a-z0-9]+")
 
 _CSS_CACHE: dict[type["HHCliThemeBase"], str] = {}
 _COLORS_CACHE: dict[type["HHCliThemeBase"], dict[str, str]] = {}
+_THEMES_CACHE: dict[str, type["HHCliThemeBase"]] | None = None
+
+DEFAULT_BASE_THEME_CSS = """$background1: #2E3440;
+$background2: #3B4252;
+$background3: #434C5E;
+
+$foreground1: #D8DEE9;
+$foreground2: #E5E9F0;
+$foreground3: #ECEFF4;
+
+$red: #BF616A;
+$orange: #D08770;
+$yellow: #EBCB8B;
+$green: #A3BE8C;
+$blue: #81A1C1;
+$purple: #B48EAD;
+$magenta: #B48EAD;
+$cyan: #8FBCBB;
+
+$primary: #8FBCBB;
+$secondary: #81A1C1;
+
+$scrim: rgba(0, 0, 0, 0.65);
+"""
 
 
 def _parse_variables(css: str) -> dict[str, str]:
@@ -23,6 +48,85 @@ def _parse_variables(css: str) -> dict[str, str]:
         if match:
             variables[match.group("name")] = match.group("value").strip()
     return variables
+
+
+def _iter_theme_files() -> list[Path]:
+    return sorted(
+        path
+        for path in THEMES_DIR.glob("*.tcss")
+        if path.is_file()
+    )
+
+
+def _slugify(stem: str) -> str:
+    slug = _SAFE_NAME_RE.sub("-", stem.lower()).strip("-")
+    return slug or "theme"
+
+
+def _class_name_from_slug(slug: str) -> str:
+    parts = slug.replace("-", "_").split("_")
+    return "HHCliTheme" + "".join(part.capitalize() for part in parts if part)
+
+
+def _build_theme_classes() -> dict[str, type["HHCliThemeBase"]]:
+    mapping: dict[str, type[HHCliThemeBase]] = {}
+    for path in _iter_theme_files():
+        slug = _slugify(path.stem)
+        candidate_slug = slug
+        suffix = 2
+        theme_name = f"hhcli-{candidate_slug}"
+        while theme_name in mapping:
+            candidate_slug = f"{slug}-{suffix}"
+            suffix += 1
+            theme_name = f"hhcli-{candidate_slug}"
+
+        class_name = _class_name_from_slug(candidate_slug)
+        attrs = {
+            "_name": theme_name,
+            "css_filename": path.name,
+            "theme_path": path,
+        }
+        theme_class = type(class_name, (HHCliThemeBase,), attrs)
+        mapping[theme_name] = theme_class
+
+    if "hhcli-base" not in mapping:
+        class_name = _class_name_from_slug("base")
+        attrs = {
+            "_name": "hhcli-base",
+            "css_filename": "base.tcss",
+            "theme_path": THEMES_DIR / "base.tcss",
+            "inline_css": DEFAULT_BASE_THEME_CSS,
+        }
+        mapping["hhcli-base"] = type(class_name, (HHCliThemeBase,), attrs)
+
+    if not mapping:
+        raise RuntimeError(  # pragma: no cover - защитная ветка
+            f"Не удалось создать ни одной темы в каталоге '{THEMES_DIR}'."
+        )
+
+    # Всегда хотим видеть базовую тему первой.
+    sorted_items = sorted(mapping.items(), key=lambda item: item[0])
+    sorted_items.sort(key=lambda item: item[0] != "hhcli-base")
+    return dict(sorted_items)
+
+
+def get_available_themes() -> dict[str, type["HHCliThemeBase"]]:
+    global _THEMES_CACHE
+    if _THEMES_CACHE is None:
+        _THEMES_CACHE = _build_theme_classes()
+    available = dict(_THEMES_CACHE)
+    globals()["AVAILABLE_THEMES"] = available
+    return available
+
+
+def refresh_available_themes() -> dict[str, type["HHCliThemeBase"]]:
+    global _THEMES_CACHE
+    _CSS_CACHE.clear()
+    _COLORS_CACHE.clear()
+    _THEMES_CACHE = _build_theme_classes()
+    available = dict(_THEMES_CACHE)
+    globals()["AVAILABLE_THEMES"] = available
+    return available
 
 
 @dataclass(slots=True)
@@ -38,6 +142,8 @@ class HHCliThemeBase:
 
     _name: ClassVar[str] = "hhcli-base"
     css_filename: ClassVar[str] = "base.tcss"
+    theme_path: ClassVar[Path | None] = None
+    inline_css: ClassVar[str | None] = None
 
     def __init__(self) -> None:
         self.css_path: Path = self._get_css_path()
@@ -53,12 +159,17 @@ class HHCliThemeBase:
 
     @classmethod
     def _load_css(cls) -> str:
-        try:
-            return _CSS_CACHE[cls]
-        except KeyError:
-            css = cls._get_css_path().read_text(encoding="utf8")
-            _CSS_CACHE[cls] = css
-            return css
+        cached = _CSS_CACHE.get(cls)
+        if cached is not None:
+            return cached
+
+        if cls.inline_css is not None:
+            _CSS_CACHE[cls] = cls.inline_css
+            return cls.inline_css
+
+        css = cls._get_css_path().read_text(encoding="utf8")
+        _CSS_CACHE[cls] = css
+        return css
 
     @classmethod
     def _load_colors(cls) -> dict[str, str]:
@@ -80,80 +191,10 @@ class HHCliThemeBase:
         return ThemeDefinition(name=cls._name, colors=cls._load_colors())
 
 
-class Nord(HHCliThemeBase):
-    """Стандартная тема по мотивам Nord."""
-
-    _name = "hhcli-nord"
-    css_filename = "nord.tcss"
-
-
-class SolarizedDark(HHCliThemeBase):
-    """Альтернативная тема по мотивам Solarized Dark."""
-
-    _name = "hhcli-solarized-dark"
-    css_filename = "solarized_dark.tcss"
-
-
-class Dracula(HHCliThemeBase):
-    """Популярная тёмная тема Dracula."""
-
-    _name = "hhcli-dracula"
-    css_filename = "dracula.tcss"
-
-
-class Monokai(HHCliThemeBase):
-    """Классическая тема Monokai."""
-
-    _name = "hhcli-monokai"
-    css_filename = "monokai.tcss"
-
-
-class GruvboxDark(HHCliThemeBase):
-    """Тёмная тема Gruvbox."""
-
-    _name = "hhcli-gruvbox-dark"
-    css_filename = "gruvbox_dark.tcss"
-
-
-class OneDark(HHCliThemeBase):
-    """Тема Atom One Dark."""
-
-    _name = "hhcli-one-dark"
-    css_filename = "one_dark.tcss"
-
-
-class GithubLight(HHCliThemeBase):
-    """Светлая тема в стиле GitHub Light."""
-
-    _name = "hhcli-github-light"
-    css_filename = "github_light.tcss"
-
-
-class TokyoNight(HHCliThemeBase):
-    """Тёмная тема Tokyo Night."""
-
-    _name = "hhcli-tokyo-night"
-    css_filename = "tokyo_night.tcss"
-
-
-_THEME_CLASSES: tuple[type[HHCliThemeBase], ...] = (
-    HHCliThemeBase,
-    Nord,
-    SolarizedDark,
-    Dracula,
-    Monokai,
-    GruvboxDark,
-    OneDark,
-    GithubLight,
-    TokyoNight,
-)
-
-
-AVAILABLE_THEMES: dict[str, type[HHCliThemeBase]] = {
-    theme._name: theme for theme in _THEME_CLASSES
-}
+AVAILABLE_THEMES: dict[str, type[HHCliThemeBase]] = get_available_themes()
 
 
 def list_themes() -> list[ThemeDefinition]:
     """Возвращает список доступных тем."""
-    return [theme.definition() for theme in AVAILABLE_THEMES.values()]
+    themes = get_available_themes()
+    return [theme.definition() for theme in themes.values()]

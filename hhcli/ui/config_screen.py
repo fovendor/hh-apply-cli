@@ -55,6 +55,12 @@ def _set_select_value(widget: Select, value: str | None) -> None:
         widget.clear()
 
 
+def _theme_value(value: str | object | None) -> str | None:
+    if value is None or value is Select.BLANK:
+        return None
+    return str(value)
+
+
 @dataclass
 class AreaOption:
     id: str
@@ -583,6 +589,9 @@ class ConfigScreen(Screen):
         self.query_one("#strikethrough_applied_vac", Switch).value = config.get(ConfigKeys.STRIKETHROUGH_APPLIED_VAC, True)
         self.query_one("#strikethrough_applied_vac_name", Switch).value = config.get(ConfigKeys.STRIKETHROUGH_APPLIED_VAC_NAME, True)
 
+        manager = self.app.css_manager
+        manager.reload_themes()
+
         self._areas = [
             AreaOption(
                 id=str(area["id"]),
@@ -608,15 +617,19 @@ class ConfigScreen(Screen):
         self._update_roles_summary()
 
         theme_select = self.query_one("#theme", Select)
-        themes = sorted(self.app.css_manager.themes.values(), key=lambda t: t._name)
+        themes = sorted(manager.themes.values(), key=lambda t: t._name)
         theme_select.set_options(
             [
                 (self._beautify_theme_name(theme._name), theme._name)
                 for theme in themes
             ]
         )
-        theme_select.value = config.get(ConfigKeys.THEME, "hhcli-base")
-        current_theme_name = self.app.css_manager.theme._name
+        configured_theme = config.get(ConfigKeys.THEME)
+        if configured_theme not in manager.themes:
+            configured_theme = manager.theme._name
+        theme_select.value = configured_theme or manager.theme._name
+
+        current_theme_name = manager.theme._name
         self._initial_theme_name = current_theme_name
         self._preview_theme_name = current_theme_name
         self._theme_committed = False
@@ -661,10 +674,11 @@ class ConfigScreen(Screen):
         name = theme_name.removeprefix("hhcli-").replace("-", " ")
         return name.title() or theme_name
 
-    def _apply_theme_preview(self, theme_name: str | None) -> None:
+    def _apply_theme_preview(self, theme_value: object | None) -> None:
         if not self.app or not self.app.css_manager:
             return
-        theme_key = (theme_name or "hhcli-base").strip() or "hhcli-base"
+        resolved = _theme_value(theme_value)
+        theme_key = (resolved or "hhcli-base").strip() or "hhcli-base"
         if self._preview_theme_name == theme_key:
             return
         try:
@@ -742,7 +756,7 @@ class ConfigScreen(Screen):
             ConfigKeys.DEDUPLICATE_BY_NAME_AND_COMPANY: self.query_one("#deduplicate_by_name_and_company", Switch).value,
             ConfigKeys.STRIKETHROUGH_APPLIED_VAC: self.query_one("#strikethrough_applied_vac", Switch).value,
             ConfigKeys.STRIKETHROUGH_APPLIED_VAC_NAME: self.query_one("#strikethrough_applied_vac_name", Switch).value,
-            ConfigKeys.THEME: self.query_one("#theme", Select).value or "hhcli-base",
+            ConfigKeys.THEME: _theme_value(self.query_one("#theme", Select).value) or "hhcli-base",
         }
         for field in self.LAYOUT_FIELDS:
             config_snapshot[field.config_key] = int_setting(
@@ -776,7 +790,7 @@ class ConfigScreen(Screen):
             return
         if not self._form_loaded:
             return
-        self._apply_theme_preview(str(event.value) if event.value else "hhcli-base")
+        self._apply_theme_preview(event.value)
 
     def _open_area_picker(self) -> None:
         if not self._areas:

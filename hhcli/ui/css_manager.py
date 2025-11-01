@@ -7,8 +7,9 @@ from uuid import uuid4
 from platformdirs import user_cache_dir
 
 from .theme import (
-    AVAILABLE_THEMES,
     HHCliThemeBase,
+    get_available_themes,
+    refresh_available_themes,
 )
 
 _cache_root = Path(user_cache_dir("hhcli"))
@@ -35,13 +36,7 @@ class CssManager:
         theme: Optional[HHCliThemeBase] = None,
         cache_path: Path = _cache_root,
     ) -> None:
-        if not self.themes:
-            self.themes = {
-                name: theme_cls()
-                for name, theme_cls in AVAILABLE_THEMES.items()
-            }
-
-        self.theme: HHCliThemeBase = theme or self.themes["hhcli-base"]
+        self._initialize_themes(theme)
         self.cache_path = cache_path
         self.stylesheets: Path = self.cache_path / "stylesheets"
         self.css_file: Path = self.cache_path / "hhcli.tcss"
@@ -53,6 +48,27 @@ class CssManager:
             self.write("")
 
         self.refresh_css()
+
+    def _initialize_themes(self, theme: Optional[HHCliThemeBase]) -> None:
+        theme_classes = get_available_themes()
+        if not theme_classes:
+            raise RuntimeError("Не найдены темы оформления.")
+
+        self.themes = {name: theme_cls() for name, theme_cls in theme_classes.items()}
+
+        requested_name = theme._name if isinstance(theme, HHCliThemeBase) else None
+        default_theme = None
+        if requested_name:
+            default_theme = self.themes.get(requested_name)
+
+        if default_theme is None:
+            default_theme = self.themes.get("hhcli-base")
+
+        if default_theme is None:
+            # Берём первую попавшуюся тему
+            default_theme = next(iter(self.themes.values()))
+
+        self.theme = default_theme
 
     def read_css(self) -> str:
         return self.css_file.read_text()
@@ -76,6 +92,9 @@ class CssManager:
     def set_theme(self, theme: Union[str, Type[HHCliThemeBase]]) -> None:
         if isinstance(theme, str):
             selected = self.themes.get(theme)
+            if selected is None:
+                self.reload_themes()
+                selected = self.themes.get(theme)
             if selected is None:
                 raise ValueError(f"Тема '{theme}' не зарегистрирована.")
             self.theme = selected
@@ -111,4 +130,18 @@ class CssManager:
     def cleanup(self) -> None:
         for sheet in self.stylesheets.glob("*.tcss"):
             sheet.unlink(missing_ok=True)
+        self.refresh_css()
+
+    def reload_themes(self) -> None:
+        """Перечитывает доступные темы с диска."""
+        current_name = getattr(self.theme, "_name", "hhcli-base")
+        theme_classes = refresh_available_themes()
+        self.themes = {name: theme_cls() for name, theme_cls in theme_classes.items()}
+
+        self.theme = (
+            self.themes.get(current_name)
+            or self.themes.get("hhcli-base")
+            or next(iter(self.themes.values()))
+        )
+
         self.refresh_css()

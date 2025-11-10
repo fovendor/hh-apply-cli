@@ -1,14 +1,20 @@
 import sys
+
 from hhcli.client import HHApiClient
 from hhcli.database import init_db, set_active_profile, get_active_profile_name, log_to_db
 from hhcli.ui.tui import HHCliApp
+from hhcli.version import get_version
 
 def run():
     """Главная функция-запускатор и диспетчер команд."""
+    args = sys.argv[1:]
+
+    if any(flag in args for flag in ("-v", "--version")):
+        print(get_version())
+        return
+
     init_db()
     log_to_db("INFO", "Main", "Запуск приложения hhcli.")
-
-    args = sys.argv[1:]
 
     if "--auth" in args:
         try:

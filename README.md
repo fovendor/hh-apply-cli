@@ -101,9 +101,15 @@ pipx install hhcli
 
 ## Обновление / удаление
 
-**Обновить**: pipx install hhcli --force
+**Обновить**: 
+```
+pipx install hhcli --force
+```
 
-**Удалить**: pipx uninstall hhcli
+**Удалить**: 
+```
+pipx uninstall hhcli
+```
 
 Если ставили из исходников, удалите виртуальное окружение и данные по пути:
 

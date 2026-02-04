@@ -3,7 +3,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/hhcli.svg?cacheSeconds=360)](https://pypi.org/project/hhcli/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Follow on Telegram](https://img.shields.io/badge/Telegram-Join-blue?logo=telegram)](https://t.me/hhcli)
-[![PyPI Downloads](https://static.pepy.tech/personalized-badge/hhcli?period=total&units=INTERNATIONAL_SYSTEM&left_color=GREY&right_color=GREEN&left_text=Downloads)](https://pepy.tech/projects/hhcli)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/hhcli?period=total&units=NONE&left_color=GRAY&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/hhcli)
 
 
 hhcli — это неофициальный CLI-клиент для поиска работы и откликов на hh.ru, позволяющий искать вакансии, просматривать их, отмечать понравившиеся и откликаться на них в интерфейсе терминала. 

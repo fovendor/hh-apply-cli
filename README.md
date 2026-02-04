@@ -103,7 +103,7 @@ pipx install hhcli
 
 **Обновить**: 
 ```
-pipx install hhcli --force
+pipx install hhcli --force --system-site-packages
 ```
 
 **Удалить**: 

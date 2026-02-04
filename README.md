@@ -101,7 +101,10 @@ pipx install hhcli
 
 ## Обновление / удаление
 
-Используйте `pipx uninstall hhcli` (Windows и Linux) или, если ставили из исходников, удалите виртуальное окружение/пакет. Данные профиля лежат в:
+**Обновить**: pipx install hhcli --force
+**Удалить**: pipx uninstall hhcli
+
+Если ставили из исходников, удалите виртуальное окружение и данные по пути:
 
 - Linux: `~/.local/share/hhcli`
 - Windows: `%LOCALAPPDATA%\hhcli`

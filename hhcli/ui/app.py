@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -45,6 +46,7 @@ class HHCliApp(App):
     def __init__(self, client) -> None:
         super().__init__(watch_css=True)
         self.client = client
+        self.client.set_captcha_flow_runner(self._run_captcha_in_ui_thread)
         self.dictionaries = {}
         self.css_manager = CSS_MANAGER
         self.title = "hhcli"
@@ -57,6 +59,15 @@ class HHCliApp(App):
         self._auto_raise_can_publish: bool = True
         self._auto_raise_enabled: bool = False
         self._auto_raise_in_progress: bool = False
+
+    def _run_captcha_in_ui_thread(self, captcha_url: str) -> bool:
+        """Открывает webview-капчу строго из main thread приложения."""
+        if not self.is_running:
+            return bool(self.client.start_captcha_flow(captcha_url))
+        app_thread_id = getattr(self, "_thread_id", None)
+        if app_thread_id == threading.get_ident():
+            return bool(self.client.start_captcha_flow(captcha_url))
+        return bool(self.call_from_thread(self.client.start_captcha_flow, captcha_url))
 
     def apply_theme_from_profile(self, profile_name: Optional[str] = None) -> None:
         """Применяет тему, указанную в конфигурации профиля"""

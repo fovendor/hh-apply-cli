@@ -26,7 +26,7 @@ from textual.widgets import (
 from textual.widgets._option_list import Option, OptionList
 from textual.widgets.text_area import TextAreaTheme
 
-from ...client import AuthorizationPending
+from ...client import AuthorizationPending, CaptchaRequired
 from ...constants import ConfigKeys, LogSource
 from ...database import (
     get_default_config,
@@ -648,6 +648,25 @@ class NegotiationHistoryScreen(Screen):
                 negotiation_id,
                 messages,
             )
+        except CaptchaRequired as captcha_exc:
+            log_to_db(
+                "WARN",
+                LogSource.SYNC_ENGINE,
+                f"Переписка недоступна до завершения капчи: {captcha_exc}",
+            )
+            self.app.call_from_thread(
+                self.app.notify,
+                "hh.ru запросил капчу. Завершите проверку в окне webview, затем повторите загрузку переписки.",
+                title="Капча",
+                severity="warning",
+                timeout=5,
+            )
+            self.app.call_from_thread(
+                self._render_chat_messages,
+                negotiation_id,
+                [],
+                "[dim]Требуется капча hh.ru. Завершите проверку в окне webview.[/dim]",
+            )
         except AuthorizationPending as auth_exc:
             log_to_db(
                 "WARN",
@@ -739,6 +758,19 @@ class NegotiationHistoryScreen(Screen):
         async def worker():
             try:
                 self.app.client.sync_negotiation_history()
+            except CaptchaRequired as captcha_exc:
+                log_to_db(
+                    "WARN",
+                    LogSource.SYNC_ENGINE,
+                    f"Синхронизация переписки прервана до завершения капчи: {captcha_exc}",
+                )
+                self.app.call_from_thread(
+                    self.app.notify,
+                    "hh.ru запросил капчу. Завершите проверку в окне webview, затем повторите обновление переписки.",
+                    title="Капча",
+                    severity="warning",
+                    timeout=5,
+                )
             except AuthorizationPending as auth_exc:
                 log_to_db(
                     "WARN",
@@ -827,6 +859,14 @@ class NegotiationHistoryScreen(Screen):
             success = self.app.client.send_negotiation_message(negotiation_id, message)
             if not success:
                 error_message = "Не удалось отправить сообщение работодателю."
+        except CaptchaRequired as captcha_exc:
+            severity = "warning"
+            error_message = f"hh.ru запросил капчу. Завершите проверку в окне webview: {captcha_exc}"
+            log_to_db(
+                "WARN",
+                LogSource.SYNC_ENGINE,
+                f"Отправка сообщения недоступна до завершения капчи: {captcha_exc}",
+            )
         except AuthorizationPending as auth_exc:
             severity = "warning"
             error_message = f"Авторизуйтесь, чтобы отправить сообщение: {auth_exc}"
@@ -896,6 +936,23 @@ class NegotiationHistoryScreen(Screen):
                 self.display_history_details,
                 details,
                 vacancy_id,
+            )
+        except CaptchaRequired as captcha_exc:
+            log_to_db(
+                "WARN",
+                LogSource.VACANCY_LIST_SCREEN,
+                f"Загрузка деталей отклика остановлена до завершения капчи: {captcha_exc}",
+            )
+            self.app.call_from_thread(
+                self.app.notify,
+                "hh.ru запросил капчу. Завершите проверку в окне webview.",
+                title="Капча",
+                severity="warning",
+                timeout=5,
+            )
+            self.app.call_from_thread(
+                self._display_details_error,
+                "Требуется капча hh.ru. Завершите проверку в окне webview.",
             )
         except AuthorizationPending as auth_exc:
             log_to_db(

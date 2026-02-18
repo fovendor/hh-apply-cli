@@ -1,6 +1,7 @@
 import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -37,6 +38,10 @@ class AuthorizationPending(RuntimeError):
     """Сигнализирует о необходимости повторной аутентификации."""
 
 
+class CaptchaRequired(AuthorizationPending):
+    """Сигнализирует, что hh.ru требует пройти капчу в webview."""
+
+
 class HHApiClient:
     """Клиент для API hh.ru, мимикрирующий под Android-приложение."""
 
@@ -44,6 +49,34 @@ class HHApiClient:
     RETRY_BACKOFF_SECONDS = 1.0
     MIN_DELAY = 0.3
     MAX_DELAY = 1.0
+    CAPTCHA_WINDOW_BOOTSTRAP_URL = "about:blank"
+    CAPTCHA_MEDIA_GUARD_JS = """
+(() => {
+  const denied = () => Promise.reject(new Error('Media access disabled by hhcli'));
+  const mediaStub = {
+    getUserMedia: denied,
+    getDisplayMedia: denied,
+    enumerateDevices: () => Promise.resolve([]),
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+    dispatchEvent: () => false
+  };
+  try {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      enumerable: true,
+      value: mediaStub
+    });
+  } catch (_err) {
+    try { navigator.mediaDevices = mediaStub; } catch (_inner) {}
+    if (navigator.mediaDevices) {
+      try { navigator.mediaDevices.getUserMedia = denied; } catch (_inner) {}
+      try { navigator.mediaDevices.getDisplayMedia = denied; } catch (_inner) {}
+      try { navigator.mediaDevices.enumerateDevices = () => Promise.resolve([]); } catch (_inner) {}
+    }
+  }
+})();
+"""
 
     def __init__(self):
         self.access_token: str | None = None
@@ -55,6 +88,7 @@ class HHApiClient:
         self._last_auth_url: str | None = None
         self._last_request_ts = time.monotonic()
         self._preferred_gui = self._detect_preferred_gui()
+        self._captcha_flow_runner: Callable[[str], bool] | None = None
 
         self.session = requests.Session()
         self.session.headers.update(
@@ -63,6 +97,10 @@ class HHApiClient:
                 "x-hh-app-active": "true",
             }
         )
+
+    def set_captcha_flow_runner(self, runner: Callable[[str], bool] | None) -> None:
+        """Регистрирует внешний раннер капчи (например, запуск в main-thread UI)."""
+        self._captcha_flow_runner = runner
 
     def load_profile_data(self, profile_name: str):
         profile_data = load_profile(profile_name)
@@ -196,15 +234,15 @@ class HHApiClient:
             log_to_db(
                 "ERROR",
                 LogSource.API_CLIENT,
-                f"Ошибка обновления токена: {e.response.text if e.response else e}",
+                f"Ошибка обновления токена: {e.response.text if e.response is not None else e}",
             )
             error_details: dict[str, Any] = {}
             try:
-                error_details = e.response.json() if e.response else {}
+                error_details = e.response.json() if e.response is not None else {}
             except Exception:  # noqa: BLE001
                 pass
             if (
-                e.response
+                e.response is not None
                 and e.response.status_code in (400, 401)
                 and error_details.get("error") == "invalid_grant"
             ):
@@ -409,6 +447,209 @@ class HHApiClient:
             "Убедитесь, что установлены зависимости веб-движка для вашей ОС."
         )
 
+    @staticmethod
+    def _extract_captcha_url(response: requests.Response | None) -> str | None:
+        """Извлекает captcha_url из ответа hh API с ошибкой captcha_required."""
+        if response is None or response.status_code != 403:
+            return None
+        try:
+            payload = response.json()
+        except Exception:  # noqa: BLE001
+            return None
+        errors = payload.get("errors") if isinstance(payload, dict) else None
+        if not isinstance(errors, list):
+            return None
+        for item in errors:
+            if not isinstance(item, dict):
+                continue
+            reason = str(item.get("value") or item.get("type") or "").strip().lower()
+            if reason != "captcha_required":
+                continue
+            captcha_url = str(item.get("captcha_url") or "").strip()
+            return captcha_url or None
+        return None
+
+    def start_captcha_flow(self, captcha_url: str) -> bool:
+        """Открывает капчу hh.ru в pywebview (тот же механизм, что OAuth-форма)."""
+        target_url = str(captcha_url or "").strip()
+        if not target_url:
+            return False
+
+        solved = {"ok": False}
+        done = threading.Event()
+        state = {"captcha_seen": False, "navigation_started": False}
+        webview_kwargs: dict[str, str] = {}
+        if self._preferred_gui:
+            webview_kwargs["gui"] = self._preferred_gui
+
+        window = webview.create_window(
+            "Проверка hh.ru (капча)",
+            url=self.CAPTCHA_WINDOW_BOOTSTRAP_URL,
+            width=480,
+            height=800,
+            resizable=True,
+        )
+
+        def _check_captcha_state() -> None:
+            if done.is_set():
+                return
+            try:
+                current_url = str(window.get_current_url() or "")
+            except Exception:
+                return
+            if not current_url:
+                return
+            normalized_url = current_url.lower()
+            if "/account/captcha" in normalized_url:
+                state["captcha_seen"] = True
+                return
+            if not state["captcha_seen"]:
+                return
+            # После посещения /account/captcha переход на любую другую страницу hh.ru
+            # считаем успешным прохождением проверки.
+            if "hh.ru" not in normalized_url:
+                return
+            if normalized_url.startswith(self.CAPTCHA_WINDOW_BOOTSTRAP_URL):
+                return
+            if normalized_url.startswith("about:"):
+                return
+            if "/account/captcha" not in normalized_url:
+                solved["ok"] = True
+                done.set()
+                try:
+                    window.destroy()
+                except Exception:
+                    pass
+
+        def _on_loaded(*_args) -> None:
+            self._inject_captcha_media_guards_js(window)
+            if not state["navigation_started"]:
+                return
+            _check_captcha_state()
+
+        def _on_closed(*_args) -> None:
+            done.set()
+
+        window.events.loaded += _on_loaded
+        window.events.closed += _on_closed
+
+        def _watch_captcha() -> None:
+            # Даем backend pywebview время создать native webview-объект, чтобы
+            # включить запрет media-пермиссий до загрузки страницы капчи.
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                if self._apply_captcha_media_guards(window):
+                    break
+                time.sleep(0.05)
+            try:
+                window.load_url(target_url)
+                state["navigation_started"] = True
+            except Exception:
+                done.set()
+                return
+            while not done.is_set():
+                _check_captcha_state()
+                time.sleep(0.2)
+
+        webview.start(func=_watch_captcha, debug=False, **webview_kwargs)
+        return bool(solved["ok"])
+
+    def _run_captcha_flow(self, captcha_url: str) -> bool:
+        """Запускает капчу через внешний раннер (если задан), иначе локально."""
+        runner = self._captcha_flow_runner
+        if runner is not None:
+            return bool(runner(captcha_url))
+        return bool(self.start_captcha_flow(captcha_url))
+
+    def _apply_captcha_media_guards(self, window) -> bool:
+        """Пытается запретить media permissions в нативном webview окна капчи."""
+        # Linux / GTK (актуально для webkit2): отключаем media stream и
+        # отклоняем любые permission-request.
+        if sys.platform.startswith("linux"):
+            try:
+                from webview.platforms import gtk as gtk_platform
+
+                browser_view = gtk_platform.BrowserView.instances.get(window.uid)
+                if not browser_view:
+                    return False
+                native_webview = getattr(browser_view, "webview", None)
+                if native_webview is None:
+                    return False
+
+                settings_props = native_webview.get_settings().props
+                if hasattr(settings_props, "enable_media_stream"):
+                    settings_props.enable_media_stream = False
+                if hasattr(settings_props, "enable_webaudio"):
+                    settings_props.enable_webaudio = False
+
+                if not getattr(window, "_hhcli_media_permission_hooked", False):
+                    def _deny_permission(_wv, request):
+                        try:
+                            request.deny()
+                        except Exception:
+                            pass
+                        return True
+
+                    native_webview.connect("permission-request", _deny_permission)
+                    setattr(window, "_hhcli_media_permission_hooked", True)
+                return True
+            except Exception:
+                return False
+        # Windows / WebView2: отклоняем camera/microphone/geolocation запросы.
+        if sys.platform.startswith("win"):
+            try:
+                from webview.platforms import winforms as winforms_platform
+
+                browser_form = winforms_platform.BrowserView.instances.get(window.uid)
+                if not browser_form:
+                    return False
+                edge_browser = getattr(browser_form, "browser", None)
+                web_view = getattr(edge_browser, "web_view", None)
+                if web_view is None:
+                    return False
+
+                def _deny_permission(_sender, args):
+                    kind = str(getattr(args, "PermissionKind", "")).lower()
+                    if not any(token in kind for token in ("camera", "microphone", "geo")):
+                        return
+                    try:
+                        state_obj = getattr(args, "State", None)
+                        deny_state = getattr(type(state_obj), "Deny", None)
+                        if deny_state is not None:
+                            args.State = deny_state
+                    except Exception:
+                        pass
+                    try:
+                        args.Handled = True
+                    except Exception:
+                        pass
+
+                if not getattr(window, "_hhcli_media_permission_hooked", False):
+                    core = getattr(web_view, "CoreWebView2", None)
+                    if core is not None and hasattr(core, "PermissionRequested"):
+                        core.PermissionRequested += _deny_permission
+                    if hasattr(web_view, "CoreWebView2InitializationCompleted"):
+                        def _on_init(sender, init_args):
+                            try:
+                                if getattr(init_args, "IsSuccess", True):
+                                    sender.CoreWebView2.PermissionRequested += _deny_permission
+                            except Exception:
+                                pass
+
+                        web_view.CoreWebView2InitializationCompleted += _on_init
+                    setattr(window, "_hhcli_media_permission_hooked", True)
+                return True
+            except Exception:
+                return False
+        return False
+
+    def _inject_captcha_media_guards_js(self, window) -> None:
+        """JS fallback: блокируем media API внутри страницы капчи."""
+        try:
+            window.evaluate_js(self.CAPTCHA_MEDIA_GUARD_JS)
+        except Exception:
+            pass
+
     def _request(self, method: str, endpoint: str, **kwargs):
         try:
             self.ensure_active_token()
@@ -420,6 +661,7 @@ class HHApiClient:
         headers["Authorization"] = f"Bearer {self.access_token}"
         url = f"{API_BASE_URL}{endpoint}"
         attempt = 0
+        captcha_attempted = False
         while True:
             self._last_request_ts = sleep_human_delay(self._last_request_ts)
             try:
@@ -436,7 +678,51 @@ class HHApiClient:
                     return None
                 return response.json()
             except requests.HTTPError as e:
-                if e.response and e.response.status_code == 401:
+                captcha_url = self._extract_captcha_url(e.response)
+                if captcha_url:
+                    if captcha_attempted:
+                        log_to_db(
+                            "ERROR",
+                            LogSource.API_CLIENT,
+                            f"Капча hh.ru не снята после повтора {method} {endpoint}.",
+                        )
+                        raise CaptchaRequired(
+                            "hh.ru требует капчу. Пройдите проверку и повторите запрос."
+                        ) from e
+                    captcha_attempted = True
+                    log_to_db(
+                        "WARN",
+                        LogSource.API_CLIENT,
+                        f"HH API запросил капчу для {method} {endpoint}. Открываю окно проверки.",
+                    )
+                    try:
+                        solved = self._run_captcha_flow(captcha_url)
+                    except WebViewException as exc:
+                        msg = self._format_webview_dependency_message(exc)
+                        log_to_db(
+                            "ERROR",
+                            LogSource.API_CLIENT,
+                            f"Не удалось открыть окно капчи: {msg} Детали: {exc}",
+                        )
+                        raise CaptchaRequired(
+                            "HH API требует капчу, но окно проверки не удалось открыть."
+                        ) from exc
+                    except Exception as exc:  # noqa: BLE001
+                        log_to_db(
+                            "ERROR",
+                            LogSource.API_CLIENT,
+                            f"Не удалось завершить капчу для {method} {endpoint}: {exc}",
+                        )
+                        raise CaptchaRequired(
+                            "HH API требует капчу, но окно проверки завершилось ошибкой."
+                        ) from exc
+                    if not solved:
+                        raise CaptchaRequired(
+                            "Проверка hh.ru не завершена. Пройдите капчу и повторите запрос."
+                        ) from e
+                    # Повторяем исходный запрос после успешной капчи.
+                    continue
+                if e.response is not None and e.response.status_code == 401:
                     log_to_db(
                         "WARN",
                         LogSource.API_CLIENT,
@@ -477,7 +763,8 @@ class HHApiClient:
                     "ERROR",
                     LogSource.API_CLIENT,
                     f"HTTP ошибка для {method} {endpoint}: "
-                    f"{e.response.status_code if e.response else 'n/a'} {e.response.text if e.response else ''}",
+                    f"{e.response.status_code if e.response is not None else 'n/a'} "
+                    f"{e.response.text if e.response is not None else ''}",
                 )
                 raise e
             except requests.RequestException as e:
@@ -679,7 +966,7 @@ class HHApiClient:
                 "WARN",
                 LogSource.API_CLIENT,
                 f"API отклонил отклик на {vacancy_id}. "
-                f"Причина: {reason}. Детали: {e.response.text if e.response else e}",
+                f"Причина: {reason}. Детали: {e.response.text if e.response is not None else e}",
             )
             return False, reason
         except requests.RequestException as e:

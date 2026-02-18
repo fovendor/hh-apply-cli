@@ -15,7 +15,7 @@ from textual.timer import Timer
 from textual.widgets import Footer, Header, LoadingIndicator, Markdown, SelectionList, Static
 from textual.widgets._selection_list import Selection
 
-from ...client import AuthorizationPending
+from ...client import AuthorizationPending, CaptchaRequired
 from ...constants import ConfigKeys, LogSource, SearchMode
 from ...database import (
     get_default_config,
@@ -292,6 +292,20 @@ class VacancyListScreen(Screen):
             )
             self.config_snapshot = snapshot
             self.app.call_from_thread(self._on_vacancies_loaded, items, pages)
+        except CaptchaRequired as captcha_exc:
+            log_to_db(
+                "WARN",
+                LogSource.VACANCY_LIST_FETCH,
+                f"Загрузка вакансий остановлена до завершения капчи: {captcha_exc}",
+            )
+            self.app.call_from_thread(
+                self.app.notify,
+                "hh.ru запросил капчу. Завершите проверку в окне webview и повторите загрузку.",
+                title="Капча",
+                severity="warning",
+                timeout=5,
+            )
+            self.app.call_from_thread(self._show_captcha_required_message)
         except AuthorizationPending as auth_exc:
             log_to_db("WARN", LogSource.VACANCY_LIST_FETCH,
                       f"Загрузка вакансий остановлена до завершения авторизации: {auth_exc}")
@@ -315,6 +329,15 @@ class VacancyListScreen(Screen):
         vacancy_list.clear_options()
         vacancy_list.add_option(
             Selection("Завершите авторизацию в браузере, затем обновите список.", "__none__", disabled=True)
+        )
+        set_loader_visible(self, "vacancy_loader", False)
+
+    def _show_captcha_required_message(self) -> None:
+        """Показывает в списке вакансий инструкцию о необходимости прохождения капчи."""
+        vacancy_list = self.query_one(VacancySelectionList)
+        vacancy_list.clear_options()
+        vacancy_list.add_option(
+            Selection("hh.ru запросил капчу. Завершите проверку в окне webview и обновите список.", "__none__", disabled=True)
         )
         set_loader_visible(self, "vacancy_loader", False)
 
@@ -474,6 +497,29 @@ class VacancyListScreen(Screen):
                 self._refresh_stats_worker(vacancy_id, force=True),
                 exclusive=False,
                 thread=True,
+            )
+        except CaptchaRequired as captcha_exc:
+            log_to_db(
+                "WARN",
+                LogSource.VACANCY_LIST_SCREEN,
+                f"Загрузка деталей вакансии остановлена до завершения капчи: {captcha_exc}",
+            )
+            self.app.call_from_thread(
+                self.app.notify,
+                "hh.ru запросил капчу. Завершите проверку в окне webview.",
+                title="Капча",
+                severity="warning",
+                timeout=5,
+            )
+            self.app.call_from_thread(
+                self.query_one("#vacancy_details").update,
+                "Требуется капча hh.ru. Завершите проверку в окне webview."
+            )
+            self.app.call_from_thread(
+                set_loader_visible,
+                self,
+                "vacancy_loader",
+                False,
             )
         except AuthorizationPending as auth_exc:
             log_to_db(
@@ -730,6 +776,20 @@ class VacancyListScreen(Screen):
                 vacancies_by_id=self.vacancies_by_id,
                 cover_letter=cover_letter,
             )
+        except CaptchaRequired as captcha_exc:
+            log_to_db(
+                "WARN",
+                LogSource.VACANCY_LIST_SCREEN,
+                f"Отправка откликов остановлена до завершения капчи: {captcha_exc}"
+            )
+            self.app.call_from_thread(
+                self.app.notify,
+                "hh.ru запросил капчу. Завершите проверку в окне webview и повторите отправку.",
+                title="Капча",
+                severity="warning",
+                timeout=5,
+            )
+            return
         except AuthorizationPending as auth_exc:
             log_to_db(
                 "WARN",

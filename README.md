@@ -32,7 +32,7 @@ hhcli — это неофициальный CLI-клиент для поиска
 <details markdown="1" style="margin-bottom: 1.5rem;">
 <summary><h3 style="display:inline">Linux</h3></summary>
 
-#### Ubuntu / Debian / Mint (apt)
+### Ubuntu / Debian / Mint (apt)
 
 ```bash
 sudo apt update && sudo apt install -y
@@ -43,7 +43,7 @@ python3 -m pipx ensurepath
 # Перезапустите терминал прежде, чем запускать программу
 ```
 
-#### Arch / Manjaro (pacman)
+### Arch / Manjaro (pacman)
 
 ```bash
 sudo pacman -Syu python python-pip pipx git webkit2gtk python-gobject gtk3
@@ -52,7 +52,7 @@ python3 -m pipx ensurepath
 # Перезапустите терминал прежде, чем запускать программу
 ```
 
-#### Fedora / RHEL / Rocky (dnf / yum)
+### Fedora / RHEL / Rocky (dnf / yum)
 
 ```bash
 sudo dnf install python3 python3-pip pipx git  # либо sudo yum install ...
@@ -63,7 +63,7 @@ python3 -m pipx ensurepath
 # Перезапустите терминал прежде, чем запускать программу
 ```
 
-#### Другие дистрибутивы
+### Другие дистрибутивы
 
 - Установите Python ≥3.9 и `pipx` из стандартного репозитория.
 - Установите WebKit2GTK+ и Python GObject bindings (названия пакетов зависят от дистрибутива).
@@ -74,7 +74,7 @@ python3 -m pipx ensurepath
 <details markdown="1">
 <summary><h3 style="display:inline">Windows</h3></summary>
 
-#### Установка Python и pipx
+### Windows 10/11
 
 1. Скачайте Python 3.9+ с [python.org](https://www.python.org/downloads/windows/) и поставьте галочку “Add Python to PATH”.
 2. Установите `pipx` (PowerShell или CMD, права администратора не нужны):
@@ -84,37 +84,17 @@ python -m pip install --upgrade pip
 python -m pip install pipx
 python -m pipx ensurepath
 ```
-
-#### Установка hhcli
-
-Перезапустите PowerShell (или CMD) и выполните:
+Перезапустите PowerShell (или CMD) и выполните установку hhcli:
 
 ```powershell
 pipx install hhcli
 ```
 
-**После установки** откройте новое окно PowerShell/Command Prompt, чтобы PATH подхватил `C:\Users\<имя>\.local\bin`. Если команда `hhcli` всё ещё не находится, убедитесь, что этот путь внесён в переменные среды (Параметры → Система → Дополнительные параметры → Переменные среды) и перезапустите терминал.
+**После установки** откройте новое окно PowerShell/CMD и введите hhcli.
 
-**Для рендеринга окна авторизации** нужен WebView2 Runtime. Обычно он уже предустановлен в Windows 10/11. Если нет — откройте [страницу Microsoft](https://developer.microsoft.com/nl-nl/microsoft-edge/webview2?form=MA13LH) и скачайте **Evergreen Bootstrapper** (x64 для большинства ПК). При закрытом интернете — берите **Evergreen Standalone Installer** под свою архитектуру (x64/x86/ARM64). Fixed Version не требуется.
+**Для окна авторизации** нужен WebView2 Runtime. Обычно он уже предустановлен в Windows 10/11. Если окно авторизации не появляется, откройте [страницу Microsoft](https://developer.microsoft.com/nl-nl/microsoft-edge/webview2?form=MA13LH) и скачайте **Evergreen Bootstrapper** (x64 для большинства ПК). Fixed Version не требуется.
 
 </details>
-
-## Обновление / удаление
-
-**Обновить**: 
-```
-pipx install hhcli --force --system-site-packages
-```
-
-**Удалить**: 
-```
-pipx uninstall hhcli
-```
-
-Если ставили из исходников, удалите виртуальное окружение и данные по пути:
-
-- Linux: `~/.local/share/hhcli`
-- Windows: `%LOCALAPPDATA%\hhcli`
 
 ## Запуск и авторизация
 
@@ -125,21 +105,6 @@ hhcli
 ```
 
 Будет предложено создать новый профиль. Придумать короткое имя для вашего профиля (go, python, pm, analyst и т.д). В открывшемся мини-браузере загрузится страница hh.ru для аутентификации на сайте. После успешной аутентификации программа предложит выбрать способ поиска вакансий. Если в аккаунте несколько резюме, сначала будет предложено выбрать, какое из них использовать для поиска.
-
-Если окно с аутентификацией на сайте не открывается или после ввода пароля ничего не происходит:
-
-- В Linux: переустановите с доступом к системным пакетам и убедитесь, что WebKit2GTK на месте. Пример для Ubuntu:
-
-  ```
-  sudo apt install python3-gi gir1.2-webkit2-4.1 gir1.2-gtk-3.0 libwebkit2gtk-4.1-0
-  pipx install hhcli --force --system-site-packages
-  ```
-
-- В Windows 10/11: установите или обновите [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (рекомендуется Evergreen Bootstrapper; при оффлайн-доступе берите Evergreen Standalone Installer под x64/x86/ARM64) и перезапустите терминал.
-
-## Использование
-
-Основное взаимодействие с приложением происходит через TUI-интерфейс.
 
 ### Настройка
 
@@ -173,13 +138,38 @@ hhcli
 - `red`, `orange`, `yellow`, `green`, `blue`, `purple`, `magenta`, `cyan` — цвета статусов и вспомогательных подсветок.
 - `scrim` — полупрозрачная подложка для модальных окон.
 
-### Основные команды (CLI)
+### Основные команды
 
 | Команда | Описание |
 | :--- | :--- |
-| `hhcli` | Запускает основной TUI-интерфейс. |
-| `hhcli -v` / `hhcli --version` | Показывает текущую версию (из PyPI). |
+| `hhcli` | Запускает основной интерфейс. |
+| `hhcli -v` / `hhcli --version` | Показывает текущую версию. |
 | `hhcli -i` / `hhcli --info` | Выводит информацию о версии, пути к локальной базе и доступных профилях. |
+
+## Обновление / удаление
+
+**Обновить**:
+
+Windows (PowerShell/CMD):
+
+```powershell
+pipx upgrade hhcli
+```
+
+Linux:
+```bash
+pipx install hhcli --force --system-site-packages
+```
+
+**Удалить**: 
+```
+pipx uninstall hhcli
+```
+
+Если ставили из исходников, удалите виртуальное окружение и данные по пути:
+
+- Linux: `~/.local/share/hhcli`
+- Windows: `%LOCALAPPDATA%\hhcli`
 
 ## TO DO
 
@@ -187,7 +177,6 @@ hhcli
 
 - Поддержка macOS.
 - Расширение возможностей фильтрации и аналитики по истории откликов.
-- Добавление экрана с дашбордом на основе истории откликов.
 - Нотификация и уведомление о непрочитанных сообщениях работодателей.
 - Возможность изменения отправленного ранее сообщения работодателю.
 

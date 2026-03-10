@@ -44,7 +44,7 @@ from ..utils.formatting import (
     normalize_width_map,
     set_loader_visible,
 )
-from ..widgets import HistoryOptionList
+from ..widgets import HistoryOptionList, Pagination
 from ..widgets.history_panel import build_history_details_markdown
 from .config import ConfigScreen
 
@@ -59,6 +59,7 @@ class NegotiationHistoryScreen(Screen):
     ]
 
     COLUMN_KEYS = ["index", "title", "company", "status", "sent", "date"]
+    PER_PAGE = 50
 
     def __init__(self, resume_id: str, resume_title: str | None = None) -> None:
         super().__init__()
@@ -66,6 +67,8 @@ class NegotiationHistoryScreen(Screen):
         self.resume_title = (resume_title or "").strip()
         self.history: list[dict] = []
         self.history_by_vacancy: dict[str, dict] = {}
+        self.current_page = 0
+        self.total_pages = 1
         self._pending_details_id: Optional[str] = None
         self._debounce_timer: Optional[Timer] = None
         self._current_chat_negotiation_id: Optional[str] = None
@@ -99,6 +102,7 @@ class NegotiationHistoryScreen(Screen):
             history_panel.styles.border_title_align = "left"
             yield Static(id="history_list_header")
             yield HistoryOptionList(id="history_list")
+            yield Pagination()
 
     def _compose_details_panel(self) -> ComposeResult:
         with Vertical(id="history_details_panel", classes="pane") as details_panel:
@@ -286,7 +290,12 @@ class NegotiationHistoryScreen(Screen):
             return
         header.update(self._build_header_text())
 
-    def _refresh_history(self) -> None:
+    def _refresh_history(
+        self,
+        page: Optional[int] = None,
+        *,
+        target_vacancy_id: Optional[str] = None,
+    ) -> None:
         self._reload_history_layout_preferences()
         self._apply_history_workspace_widths()
         header = self.query_one("#history_list_header", Static)
@@ -294,16 +303,36 @@ class NegotiationHistoryScreen(Screen):
 
         option_list = self.query_one(HistoryOptionList)
         option_list.clear_options()
+        pagination = self.query_one(Pagination)
 
         profile_name = self.app.client.profile_name
         entries = fetch_resume_history(profile_name, self.resume_id)
 
-        self.history = entries
         self.history_by_vacancy = {
             str(item.get("vacancy_id")): item for item in entries if item.get("vacancy_id")
         }
+        total_items = len(entries)
+        self.total_pages = max(1, (total_items + self.PER_PAGE - 1) // self.PER_PAGE)
+
+        if target_vacancy_id:
+            target_index = next(
+                (
+                    idx
+                    for idx, item in enumerate(entries)
+                    if str(item.get("vacancy_id") or "") == str(target_vacancy_id)
+                ),
+                None,
+            )
+            if target_index is not None:
+                page = target_index // self.PER_PAGE
+
+        if page is None:
+            page = self.current_page
+        self.current_page = clamp(page, 0, self.total_pages - 1)
+        pagination.update_state(self.current_page, self.total_pages)
 
         if not entries:
+            self.history = []
             option_list.add_option(
                 Option("История откликов пуста.", "__none__", disabled=True)
             )
@@ -313,7 +342,11 @@ class NegotiationHistoryScreen(Screen):
             set_loader_visible(self, "history_loader", False)
             return
 
-        for idx, entry in enumerate(entries, start=1):
+        start_offset = self.current_page * self.PER_PAGE
+        page_entries = entries[start_offset:start_offset + self.PER_PAGE]
+        self.history = page_entries
+
+        for idx, entry in enumerate(page_entries, start=1):
             vacancy_id = str(entry.get("vacancy_id") or "")
             title = entry.get("vacancy_title") or vacancy_id
             company = entry.get("employer_name") or "-"
@@ -324,7 +357,7 @@ class NegotiationHistoryScreen(Screen):
             )
 
             row_text = self._build_row_text(
-                index=f"#{idx}",
+                index=f"#{start_offset + idx}",
                 title=title,
                 company=company,
                 status=status_label,
@@ -333,7 +366,24 @@ class NegotiationHistoryScreen(Screen):
             )
             option_list.add_option(Option(row_text, vacancy_id))
 
-        option_list.highlighted = 0 if option_list.option_count else None
+        preferred_vacancy_id = str(
+            target_vacancy_id
+            or self._pending_details_id
+            or self._current_chat_vacancy_id
+            or ""
+        )
+        target_option_index = None
+        if preferred_vacancy_id:
+            for idx in range(option_list.option_count):
+                option = option_list.get_option_at_index(idx)
+                if option and str(option.id) == preferred_vacancy_id:
+                    target_option_index = idx
+                    break
+
+        option_list.highlighted = (
+            target_option_index if target_option_index is not None else
+            (0 if option_list.option_count else None)
+        )
         option_list.focus()
 
         if option_list.option_count and option_list.highlighted is not None:
@@ -804,21 +854,23 @@ class NegotiationHistoryScreen(Screen):
 
     def _after_chat_sync(self, vacancy_id: str) -> None:
         self._negotiation_sync_in_progress = False
-        self._refresh_history()
-        option_list = self.query_one(HistoryOptionList)
-        target_index = None
-        for idx in range(option_list.option_count):
-            opt = option_list.get_option_at_index(idx)
-            if opt and str(opt.id) == str(vacancy_id):
-                target_index = idx
-                break
-        if target_index is not None:
-            option_list.highlighted = target_index
-            record = self.history_by_vacancy.get(str(vacancy_id), {})
-            self._load_chat_for_negotiation(
-                record.get("negotiation_id"),
-                vacancy_id=str(vacancy_id),
-            )
+        self._refresh_history(target_vacancy_id=vacancy_id)
+
+    def action_prev_page(self) -> None:
+        """Переключает историю на предыдущую страницу"""
+        if self.current_page > 0:
+            self._refresh_history(page=self.current_page - 1)
+
+    def action_next_page(self) -> None:
+        """Переключает историю на следующую страницу"""
+        if self.current_page < self.total_pages - 1:
+            self._refresh_history(page=self.current_page + 1)
+
+    def on_pagination_page_changed(
+        self, message: Pagination.PageChanged
+    ) -> None:
+        """Обрабатывает переключение страницы через виджет пагинации"""
+        self._refresh_history(page=message.page)
 
     def action_send_chat_message(self) -> None:
         if self._chat_send_in_progress:
